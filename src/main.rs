@@ -1,5 +1,7 @@
 mod utils;
+mod dbus;
 use crate::utils::*;
+use crate::dbus::*;
 
 use openrgb::data::{Controller, LED};
 use openrgb::OpenRGB;
@@ -9,6 +11,7 @@ use tokio::{net::TcpStream, time::sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+
     // connect to default server at localhost
     let client = OpenRGB::connect().await?;
 
@@ -94,10 +97,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .collect(),
         );
     }
-
-    fade_into_frame(&BLACK_SUBSTRATE, 1500);
-
-    loop {};
+    
+    process_dbus().await?;
 
     Ok(())
 }

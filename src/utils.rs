@@ -50,6 +50,7 @@ pub static NUM_PAD_COLOR: LazyColor = Lazy::new(|| parse_hex("#0094FF"));
 
 pub static GRAY_SUBSTRATE: LazyFrame = Lazy::new(|| vec![GRAY; TOTAL_LEDS as usize]);
 pub static BLACK_SUBSTRATE: LazyFrame = Lazy::new(|| vec![BLACK; TOTAL_LEDS as usize]);
+pub static BASE_SUBSTRATE: LazyFrame = Lazy::new(|| vec![]);
 
 pub static LAST_FRAME: RwLock<Frame> = RwLock::new(Vec::new());
 pub static FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(|| ConcurrentQueue::unbounded());

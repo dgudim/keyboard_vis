@@ -1,7 +1,7 @@
-mod utils;
 mod dbus;
-use crate::utils::*;
+mod utils;
 use crate::dbus::*;
+use crate::utils::*;
 
 use openrgb::data::{Controller, LED};
 use openrgb::OpenRGB;
@@ -11,7 +11,6 @@ use tokio::{net::TcpStream, time::sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-
     // connect to default server at localhost
     let client = OpenRGB::connect().await?;
 
@@ -36,7 +35,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     tokio::spawn(async move {
         match render_frames(target_controller_id.unwrap(), &client).await {
-            Ok(_) => {},
+            Ok(_) => {}
             Err(e) => {
                 print!("Ann error occured in the frame rendering loop: {}", e);
             }
@@ -97,8 +96,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .collect(),
         );
     }
-    
-    process_dbus().await?;
+
+    process_dbus(target_substrate)?;
 
     Ok(())
 }

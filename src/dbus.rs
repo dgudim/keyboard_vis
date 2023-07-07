@@ -1,32 +1,41 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, error::Error, time::Duration};
 
-use dbus::{channel::MatchingReceiver, message::MatchRule, blocking::Connection};
-use dbus_tokio::connection;
+use dbus::{blocking::Connection, message::MatchRule};
 
-pub async fn process_dbus() -> Result<(), Box<dyn std::error::Error>> {
+use crate::utils::{fade_into_frame, Frame, BLACK_SUBSTRATE};
+
+pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
     // Connect to the D-Bus session bus (this is blocking, unfortunately).
-    let (resource, conn) = connection::new_session_sync()?;
-
-    // The resource is a task that should be spawned onto a tokio compatible
-    // reactor ASAP. If the resource ever finishes, you lost connection to D-Bus.
-    //
-    // To shut down the connection, both call _handle.abort() and drop the connection.
-    let handle = tokio::spawn(async {
-        let err = resource.await;
-        panic!("Lost connection to D-Bus: {}", err);
-    });
-
+    let conn = Connection::new_session()?;
 
     let mr_progress = MatchRule::new_signal("com.canonical.Unity.LauncherEntry", "Update");
-    let signal_progress = conn
-        .add_match(mr_progress)
-        .await?
-        .cb(|message, (_,): (String,)| {
-            let (data1, data2): (&str, HashMap<&str, u16>) =
-                message.read2().expect("Error reading data");
-            println!("File progress: {} : {:#?}", data1, message.get_items());
-            true
-        });
+    conn.add_match(mr_progress, |_: (), _, message| {
+        let (data1, data2): (&str, HashMap<&str, u16>) =
+            message.read2().expect("Error reading data");
+        println!("File progress: {} : {:#?}", data1, message.get_items());
+        true
+    })?;
+
+    let mr_screen = MatchRule::with_member(
+        MatchRule::with_interface(
+            MatchRule::with_path(MatchRule::new(), "/org/freedesktop/ScreenSaver"),
+            "org.freedesktop.ScreenSaver",
+        ),
+        "ActiveChanged",
+    );
+    conn.add_match(mr_screen, move |_: (), _, message| {
+        let locked: bool = message.read1().expect("Error reading data");
+        println!("Screen locked/unlocked {locked}");
+        fade_into_frame(
+            if locked {
+                &BLACK_SUBSTRATE
+            } else {
+                &base_frame
+            },
+            1500,
+        );
+        true
+    })?;
 
     // let mr_screen = MatchRule::new();
     // let signal_screen = conn
@@ -37,11 +46,7 @@ pub async fn process_dbus() -> Result<(), Box<dyn std::error::Error>> {
     //         true
     //     });
 
-    handle.await?;
-
-    // Needed here to ensure the "incoming_signal" object is not dropped too early
-    conn.remove_match(signal_progress.token()).await?;
-    //conn.remove_match(signal_screen.token()).await?;
-
-    unreachable!()
+    loop {
+        conn.process(Duration::from_millis(1000)).unwrap();
+    }
 }

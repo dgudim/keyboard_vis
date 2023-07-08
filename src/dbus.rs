@@ -69,9 +69,9 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
             println!("Screen locked/unlocked {locked}");
             fade_into_frame(
                 if locked {
-                    &BLACK_SUBSTRATE
+                    BLACK_SUBSTRATE.clone()
                 } else {
-                    &base_frame
+                    base_frame.clone()
                 },
                 1500,
             );

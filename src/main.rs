@@ -66,35 +66,31 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let center_x = (ROW_LENGTH / 2) as i64;
     let center_y = (ROWS / 2) as i64;
-    let corner_dist = ((center_x * center_x + center_y * center_y) as f64).sqrt();
+
     for target_dist in 0..center_x * 3 {
         let target_dist_f = target_dist as f64;
 
-        enq_frame(
-            &GRAY_SUBSTRATE
-                .iter()
-                .enumerate()
-                .map(|(index, gray)| {
-                    let pos = num2xy(index as u32);
-                    let distance_from_center = (((pos.x as i64 - center_x).pow(2)
-                        + (pos.y as i64 - center_y).pow(2))
-                        as f64)
+        let intermediate: Frame = GRAY_SUBSTRATE
+            .iter()
+            .enumerate()
+            .map(|(index, gray)| {
+                let pos = num2xy(index as u32);
+                let distance_from_center =
+                    (((pos.x as i64 - center_x).pow(2) + (pos.y as i64 - center_y).pow(2)) as f64)
                         .sqrt();
 
-                    if distance_from_center < target_dist_f {
-                        let i_offset: f64 = target_dist_f - 10.0;
-                        let distance_factor = (distance_from_center - i_offset) / corner_dist;
+                // center color to gray
+                if distance_from_center < target_dist_f {
+                    let distance_factor = (distance_from_center - target_dist_f + 7.0) / 4.0; // 7 led offset from the center, 4 led width (offset from the edge)
+                    return lerp_color(&target_substrate[index], gray, distance_factor);
+                }
 
-                        return lerp_color(&target_substrate[index], gray, distance_factor);
-                    } else if distance_from_center < target_dist_f + 1.0 {
-                        // edge lighting
-                        return WHITE;
-                    }
-                    // the rest of the key board
-                    return BLACK;
-                })
-                .collect(),
-        );
+                let distance_factor = (distance_from_center - target_dist_f) / 2.0;
+                return lerp_color(&WHITE, &BLACK, distance_factor);
+            })
+            .collect();
+
+        fade_into_frame(intermediate, FRAME_DELTA * 2) // stretch each frame 2 times
     }
 
     process_dbus(target_substrate)?;
@@ -102,12 +98,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn enq_frame(frame: &Frame) -> () {
+fn enq_frame(frame: Frame) -> () {
     let mut last_frame = LAST_FRAME
         .write()
         .expect("Could not lock mutex to write frame");
     *last_frame = frame.clone();
-    match FRAME_Q.push(frame.clone()) {
+    match FRAME_Q.push(frame) {
         Ok(_) => {}
         Err(e) => {
             println!("Error adding frame! ({})", e);

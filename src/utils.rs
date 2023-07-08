@@ -37,9 +37,9 @@ pub const WHITE: Color = Color {
     b: 255,
 };
 pub const GRAY: Color = Color {
-    r: 100,
-    g: 85,
-    b: 100,
+    r: 80,
+    g: 65,
+    b: 80,
 };
 
 pub static MAIN_COLOR: LazyColor = Lazy::new(|| parse_hex("#df3b00"));
@@ -50,9 +50,9 @@ pub static NUM_PAD_COLOR: LazyColor = Lazy::new(|| parse_hex("#0094FF"));
 
 pub static GRAY_SUBSTRATE: LazyFrame = Lazy::new(|| vec![GRAY; TOTAL_LEDS as usize]);
 pub static BLACK_SUBSTRATE: LazyFrame = Lazy::new(|| vec![BLACK; TOTAL_LEDS as usize]);
-pub static BASE_SUBSTRATE: LazyFrame = Lazy::new(|| vec![]);
+pub static BASE_SUBSTRATE: LazyFrame = Lazy::new(|| BLACK_SUBSTRATE.clone());
 
-pub static LAST_FRAME: RwLock<Frame> = RwLock::new(Vec::new());
+pub static LAST_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(BLACK_SUBSTRATE.clone()));
 pub static FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(|| ConcurrentQueue::unbounded());
 pub const KEYBOARD_NAME: &str = "Razer Ornata Chroma";
 
@@ -87,11 +87,11 @@ pub fn lerp_color(from: &Color, to: &Color, progress: f64) -> Color {
     };
 }
 
-pub fn fade_into_frame(frame_to: &Frame, time: u32) {
+pub fn fade_into_frame(frame_to: Frame, time: u32) {
     let iterations = time / FRAME_DELTA;
     let frame_from = LAST_FRAME.read().expect("Failed reading last frame").clone(); // dont's cause a deadlock, copy the starting frame
     for i in 1..(iterations + 1) {
-        enq_frame(&frame_from.iter().enumerate().map(|(index, color_from)| -> Color {
+        enq_frame(frame_from.iter().enumerate().map(|(index, color_from)| -> Color {
             return lerp_color(color_from, &frame_to[index], i as f64 / iterations as f64);
         }).collect());
     }

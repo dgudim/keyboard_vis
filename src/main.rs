@@ -90,7 +90,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             })
             .collect();
 
-        fade_into_frame(intermediate, FRAME_DELTA * 2) // stretch each frame 2 times
+        fade_into_frame(&intermediate, FRAME_DELTA * 2) // stretch each frame 2 times
     }
 
     process_dbus(target_substrate)?;

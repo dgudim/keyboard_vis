@@ -1,5 +1,10 @@
 use core::num;
-use std::{collections::HashMap, ops::AddAssign, sync::RwLock};
+use std::{
+    collections::HashMap,
+    ops::AddAssign,
+    sync::{Arc, RwLock},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use concurrent_queue::ConcurrentQueue;
 use css_color_parser::Color as CssColor;
@@ -13,11 +18,18 @@ pub type LazyColor = Lazy<Color>;
 pub type Frame = Vec<Color>;
 pub type LazyFrame = Lazy<Frame>;
 
+pub struct NotificationSettings {
+    pub color: Color,
+    pub important: bool,
+    pub flash_on_notify: bool,
+    pub flash_on_auto_close: Color,
+}
+
 pub struct Notification {
     pub id: u32,
-    pub source: String,
-    pub color: Color,
-    pub timestamp: u128
+    pub sender: String,
+    pub settings: Arc<NotificationSettings>,
+    pub timestamp: u128,
 }
 
 pub type ProgressMap = HashMap<String, (Color, f64)>;
@@ -44,14 +56,14 @@ impl AddAssign<&Color> for WideColor {
 }
 
 pub struct Point {
-    pub x: u32,
-    pub y: u32,
+    pub x: usize,
+    pub y: usize,
 }
 
-pub const ROW_LENGTH: u32 = 22;
-pub const TOP_ROW_LENGTH: u32 = ROW_LENGTH - 4;
-pub const ROWS: u32 = 6;
-pub const TOTAL_LEDS: u32 = ROW_LENGTH * ROWS;
+pub const ROW_LENGTH: usize = 22;
+pub const TOP_ROW_LENGTH: usize = ROW_LENGTH - 4;
+pub const ROWS: usize = 6;
+pub const TOTAL_LEDS: usize = ROW_LENGTH * ROWS;
 
 pub const FRAME_DELTA: u32 = 75;
 
@@ -80,10 +92,10 @@ pub static FUNCTION_COLOR: LazyColor = Lazy::new(|| parse_hex("#B200FF"));
 pub static FUNCTION_COLOR2: LazyColor = Lazy::new(|| parse_hex("#B200AA"));
 pub static NUM_PAD_COLOR: LazyColor = Lazy::new(|| parse_hex("#0094FF"));
 
-pub const RED: LazyColor = Lazy::new(|| parse_hex("#ff4242"));
-pub const GREEN: LazyColor = Lazy::new(|| parse_hex("#68ff42"));
-pub const BLUE: LazyColor = Lazy::new(|| parse_hex("#42adff"));
-pub const PURPLE: LazyColor = Lazy::new(|| parse_hex("#c342ff"));
+pub const RED: LazyColor = Lazy::new(|| parse_hex("#ff0000"));
+pub const GREEN: LazyColor = Lazy::new(|| parse_hex("#00ff00"));
+pub const BLUE: LazyColor = Lazy::new(|| parse_hex("#0000ff"));
+pub const PURPLE: LazyColor = Lazy::new(|| parse_hex("#ff00ff"));
 
 pub static GRAY_SUBSTRATE: LazyFrame = Lazy::new(|| vec![GRAY; TOTAL_LEDS as usize]);
 pub static BLACK_SUBSTRATE: LazyFrame = Lazy::new(|| vec![BLACK; TOTAL_LEDS as usize]);
@@ -92,13 +104,13 @@ pub static LAST_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(BLACK_SUBS
 pub static FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(|| ConcurrentQueue::unbounded());
 pub const KEYBOARD_NAME: &str = "Razer Ornata Chroma";
 
-pub fn xy2num(x: u32, y: u32) -> u32 {
+pub fn xy2num(x: usize, y: usize) -> usize {
     let xc = x.clamp(0, ROW_LENGTH - 1);
     let yc = y.clamp(0, ROWS - 1);
     return xc + (ROWS - 1 - yc) * ROW_LENGTH;
 }
 
-pub fn num2xy(n: u32) -> Point {
+pub fn num2xy(n: usize) -> Point {
     let nc = n.clamp(0, TOTAL_LEDS);
     let y = nc / ROW_LENGTH;
     let x = nc - y * ROW_LENGTH;
@@ -140,6 +152,19 @@ pub fn fade_into_frame(frame_to: &Frame, time_ms: u32) {
                 .collect(),
         );
     }
+}
+
+pub fn get_timestamp() -> u128 {
+    return SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards")
+        .as_millis();
+}
+
+pub fn flash_frame(frame_to: &Frame, frame_base: &Frame, fade_in_ms: u32, hold: u32, fade_out_ms: u32) {
+    fade_into_frame(frame_to, fade_in_ms);
+    fade_into_frame(frame_to, hold);
+    fade_into_frame(frame_base, fade_out_ms);
 }
 
 pub fn display_progress(base: &Frame, map: &ProgressMap) {
@@ -187,6 +212,17 @@ pub fn display_progress(base: &Frame, map: &ProgressMap) {
     fade_into_frame(&new_frame, 230);
 }
 
+pub fn display_notifications(base_frame: &Frame, notifs: &Vec<Notification>) {
+    let mut frame = base_frame.clone();
+    let mut index = 0;
+    for notif in notifs {
+        let led_index = xy2num(ROW_LENGTH - 4 + index % 3, index / 4 + 1);
+        frame[led_index] = notif.settings.color;
+        index += 1;
+    }
+    fade_into_frame(&frame, 300);
+}
+
 pub struct KeyMap<'a> {
     pub keys: Vec<&'a str>,
     pub color: Color,
@@ -213,4 +249,8 @@ pub fn get_frame_by_key_names(
             };
         })
         .collect();
+}
+
+pub fn get_frame_by_condition(base_frame: &Frame, f: &dyn Fn((usize, &Color)) -> Color) -> Frame {
+    return base_frame.iter().enumerate().map(f).collect();
 }

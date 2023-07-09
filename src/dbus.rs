@@ -1,15 +1,18 @@
 use std::{
+    collections::HashMap,
     error::Error,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc, RwLock,
     },
-    time::{Duration, SystemTime, UNIX_EPOCH}, vec,
+    time::Duration,
+    vec,
 };
 
 use crate::utils::{
-    display_progress, fade_into_frame, parse_hex, Frame, Notification, ProgressMap,
-    BLACK_SUBSTRATE, BLUE, GREEN, PURPLE, RED, TOP_ROW_LENGTH, WHITE,
+    display_notifications, display_progress, fade_into_frame, flash_frame, get_frame_by_condition,
+    get_timestamp, num2xy, parse_hex, Frame, Notification, NotificationSettings, ProgressMap,
+    BLACK, BLACK_SUBSTRATE, BLUE, GREEN, PURPLE, RED, ROW_LENGTH, TOP_ROW_LENGTH, WHITE,
 };
 use dbus::{
     arg::{prop_cast, PropMap},
@@ -35,7 +38,41 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
     let pending_notification_q = Arc::new(RwLock::new(Vec::<Notification>::new()));
     let notification_q = Arc::new(RwLock::new(Vec::<Notification>::new()));
 
-    let notification_map = vec!["Thunderbird", "Telegram desktop"];
+    let mut notification_map = HashMap::new();
+    notification_map.insert(
+        "Thunderbird",
+        Arc::new(NotificationSettings {
+            color: parse_hex("#066678"),
+            flash_on_auto_close: WHITE,
+            flash_on_notify: false,
+            important: true,
+        }),
+    );
+    notification_map.insert(
+        "Telegram Desktop",
+        Arc::new(NotificationSettings {
+            color: WHITE,
+            flash_on_auto_close: *BLUE,
+            flash_on_notify: true,
+            important: true,
+        }),
+    );
+    notification_map.insert(
+        "notify-send",
+        Arc::new(NotificationSettings {
+            color: *RED,
+            flash_on_auto_close: *BLUE,
+            flash_on_notify: true,
+            important: true,
+        }),
+    );
+    let default_notification_settings = Arc::new(NotificationSettings {
+        color: BLACK,
+        flash_on_auto_close: BLACK,
+        flash_on_notify: false,
+        important: false,
+    });
+    let notification_delivery_timeout = 2000;
 
     let mut progress_map = ProgressMap::new();
     progress_map.insert(
@@ -114,31 +151,25 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
 
             // flash in special cases
             if progress == 0.0 {
-                let frame_to = base_frame_p
-                    .clone()
-                    .iter()
-                    .enumerate()
-                    .map(|(index, val)| {
-                        if index < TOP_ROW_LENGTH as usize {
-                            return if progress_visible {
-                                if count > 1 {
-                                    *GREEN // visible notification with visible progress that has (just started probably)
-                                } else {
-                                    *RED // invisible (probably closed) notification with visible progress (idk when this occurs)
-                                }
+                let frame_to = get_frame_by_condition(&base_frame_p, &|(index, val)| {
+                    if index < TOP_ROW_LENGTH as usize {
+                        return if progress_visible {
+                            if count > 1 {
+                                *GREEN // visible notification with visible progress that has (just started probably)
                             } else {
-                                if count > 1 {
-                                    *BLUE // visible notification without visible progress (idk when this occurs)
-                                } else {
-                                    *PURPLE // invisible notification without visible progress (spectacle call, download finished)
-                                }
-                            };
-                        }
-                        return *val;
-                    })
-                    .collect();
-                fade_into_frame(&frame_to, 300);
-                fade_into_frame(&base_frame_p, 600);
+                                *RED // invisible (probably closed) notification with visible progress (idk when this occurs, probably not even on notifications)
+                            }
+                        } else {
+                            if count > 1 {
+                                *BLUE // visible notification without visible progress (idk when this occurs)
+                            } else {
+                                *PURPLE // invisible notification without visible progress (spectacle call, download finished)
+                            }
+                        };
+                    }
+                    return *val;
+                });
+                flash_frame(&frame_to, &base_frame_p, 200, 300, 200);
             }
 
             let mut tuple = progress_map
@@ -160,6 +191,7 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
         }),
     );
 
+    let base_frame_p = base_frame.clone();
     conn.start_receive(
         mr_screen,
         Box::new(move |message: Message, _| {
@@ -170,7 +202,7 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
                 if locked {
                     &BLACK_SUBSTRATE
                 } else {
-                    &base_frame
+                    &base_frame_p
                 },
                 1500,
             );
@@ -182,45 +214,110 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
     conn.start_receive(
         mr_notification_opened,
         Box::new(move |message: Message, _| {
-            let (source, _, _, summary): (String, u32, String, String) = message.read4().unwrap();
+            let (application, _, _, summary): (String, u32, String, String) =
+                message.read4().unwrap();
             let sender = message.sender().unwrap().to_string();
-            println!("Notification sent from {source} ({sender}) | {summary}");
+            println!("Notification sent from {application} ({sender}) | {summary}");
             let mut pending_notif_q = pending_notification_qc.write().unwrap();
 
-            let timestamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("Time went backwards")
-                .as_millis();
-
+            let arc_settings = notification_map
+                .get(application.as_str())
+                .unwrap_or(&default_notification_settings);
             pending_notif_q.push(Notification {
                 id: 0,
-                source,
-                color: *RED,
-                timestamp,
+                sender,
+                timestamp: get_timestamp(),
+                settings: arc_settings.clone(),
             });
             true
         }),
     );
 
+    let pending_notification_qc = pending_notification_q.clone();
+    let base_frame_p = base_frame.clone();
     conn.start_receive(
         mr_notification_closed,
-        Box::new(|message: Message, _| {
+        Box::new(move |message: Message, _| {
             let (id, reason): (u32, u32) = message.read2().unwrap();
-            println!("Notification closed {id} with reason {reason}");
+            let mut ind: i64 = -1;
+
+            let mut pending_notif_q = pending_notification_qc.write().unwrap();
+
+            match pending_notif_q
+                .iter_mut()
+                .enumerate()
+                .find(|(_, notif)| notif.id == id)
+            {
+                Some((index, _)) => {
+                    println!("Notification with id {id} closed with reason {reason}");
+                    ind = index as i64;
+                }
+                None => {
+                    println!(
+                        "!!!!!! Unknown notification closed, id: {id}, could not find matching id"
+                    );
+                }
+            };
+
+            if ind != -1 {
+                let notif = pending_notif_q.remove(ind as usize);
+                let settings = &notif.settings;
+
+                if settings.flash_on_auto_close != BLACK && reason != 2 {
+                    // reason = 1 - expired, 2 - user, 3 - auto, 4 - other
+                    let frame = get_frame_by_condition(&base_frame_p, &|(index, color)| {
+                        let pos = num2xy(index);
+                        if pos.x >= ROW_LENGTH - 4 {
+                            settings.flash_on_auto_close
+                        } else {
+                            *color
+                        }
+                    });
+                    flash_frame(&frame, &base_frame_p, 300, 1000, 300);
+                }
+
+                // move queues on auto-close
+                if settings.important && reason != 2 {
+                    let mut notif_q = notification_q.write().unwrap();
+                    notif_q.push(notif);
+                    println!("Moved {id} to display queue");
+                    display_notifications(&base_frame_p, &notif_q);
+                }
+            }
+
             true
         }),
     );
 
     conn.start_receive(
         mr_notification_delivered,
-        Box::new(|message: Message, _| {
+        Box::new(move |message: Message, _| {
             match message.read1::<u32>() {
                 Ok(id) => {
-                    println!(
-                        "Notification delivered {:#?} (reply to {})",
-                        id,
-                        message.destination().unwrap()
-                    );
+                    let destination = message.destination().unwrap().to_string();
+
+                    let mut pending_notif_q = pending_notification_q.write().unwrap();
+                    match pending_notif_q.iter_mut().rev().find(|notif| notif.sender == destination) {
+                        Some(notif) => {
+                            notif.id = id;
+                            println!("Notification delivered, set it id to {id} | reply to {destination}");
+                            let settings = &notif.settings;
+                            if settings.flash_on_notify {
+                                let frame = get_frame_by_condition(&base_frame, &|(index, color)| {
+                                    let pos = num2xy(index);
+                                    if pos.x >= ROW_LENGTH - 4 { settings.color } else { *color }
+                                });
+                                flash_frame(&frame, &base_frame, 300, 1000, 300);
+                            }
+                        },
+                        None => {
+                            println!("!!!!!! Unknown delivery to {destination}, could not find matching sender");
+                        },
+                    }
+
+                    // cleanup broken notifications
+                    let deadline_time = get_timestamp() + notification_delivery_timeout;
+                    pending_notif_q.retain(|notif| notif.timestamp <= deadline_time);
                 }
                 Err(e) => {
                     println!("Unknown message: {:?}: {e}", message)

@@ -74,7 +74,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .iter()
             .enumerate()
             .map(|(index, gray)| {
-                let pos = num2xy(index as u32);
+                let pos = num2xy(index);
                 let distance_from_center =
                     (((pos.x as i64 - center_x).pow(2) + (pos.y as i64 - center_y).pow(2)) as f64)
                         .sqrt();

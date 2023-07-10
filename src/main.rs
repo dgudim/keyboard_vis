@@ -63,11 +63,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
             false => *MAIN_COLOR,
         },
     );
-
-    let center_x = (ROW_LENGTH / 2) as i64;
-    let center_y = (ROWS / 2) as i64;
-
-    for target_dist in 0..center_x * 3 {
+    
+    for target_dist in 0..CENTER_X * 3 {
         let target_dist_f = target_dist as f64;
 
         let intermediate: Frame = GRAY_SUBSTRATE
@@ -76,7 +73,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .map(|(index, gray)| {
                 let pos = num2xy(index);
                 let distance_from_center =
-                    (((pos.x as i64 - center_x).pow(2) + (pos.y as i64 - center_y).pow(2)) as f64)
+                    (((pos.x as i64 - CENTER_X).pow(2) + (pos.y as i64 - CENTER_Y).pow(2)) as f64)
                         .sqrt();
 
                 // center color to gray

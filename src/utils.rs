@@ -1,8 +1,10 @@
-use core::num;
 use std::{
     collections::HashMap,
     ops::AddAssign,
-    sync::{Arc, RwLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, RwLock,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -61,9 +63,12 @@ pub struct Point {
 }
 
 pub const ROW_LENGTH: usize = 22;
-pub const TOP_ROW_LENGTH: usize = ROW_LENGTH - 4;
+pub const COL_OFFSET: usize = 1;
+pub const TOP_ROW_LENGTH: usize = ROW_LENGTH - 4 - COL_OFFSET;
 pub const ROWS: usize = 6;
 pub const TOTAL_LEDS: usize = ROW_LENGTH * ROWS;
+pub const CENTER_X: i64 = (ROW_LENGTH / 2) as i64;
+pub const CENTER_Y: i64 = (ROWS / 2) as i64;
 
 pub const FRAME_DELTA: u32 = 75;
 
@@ -95,6 +100,7 @@ pub static NUM_PAD_COLOR: LazyColor = Lazy::new(|| parse_hex("#0094FF"));
 pub const RED: LazyColor = Lazy::new(|| parse_hex("#ff0000"));
 pub const GREEN: LazyColor = Lazy::new(|| parse_hex("#00ff00"));
 pub const BLUE: LazyColor = Lazy::new(|| parse_hex("#0000ff"));
+pub const CYAN: LazyColor = Lazy::new(|| parse_hex("#00ffff"));
 pub const PURPLE: LazyColor = Lazy::new(|| parse_hex("#ff00ff"));
 
 pub static GRAY_SUBSTRATE: LazyFrame = Lazy::new(|| vec![GRAY; TOTAL_LEDS as usize]);
@@ -102,6 +108,7 @@ pub static BLACK_SUBSTRATE: LazyFrame = Lazy::new(|| vec![BLACK; TOTAL_LEDS as u
 
 pub static LAST_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(BLACK_SUBSTRATE.clone()));
 pub static FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(|| ConcurrentQueue::unbounded());
+pub static SCREEN_LOCKED: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
 pub const KEYBOARD_NAME: &str = "Razer Ornata Chroma";
 
 pub fn xy2num(x: usize, y: usize) -> usize {
@@ -161,13 +168,19 @@ pub fn get_timestamp() -> u128 {
         .as_millis();
 }
 
-pub fn flash_frame(frame_to: &Frame, frame_base: &Frame, fade_in_ms: u32, hold: u32, fade_out_ms: u32) {
+pub fn flash_frame(
+    frame_to: &Frame,
+    frame_base: &Frame,
+    fade_in_ms: u32,
+    hold: u32,
+    fade_out_ms: u32,
+) {
     fade_into_frame(frame_to, fade_in_ms);
     fade_into_frame(frame_to, hold);
     fade_into_frame(frame_base, fade_out_ms);
 }
 
-pub fn display_progress(base: &Frame, map: &ProgressMap) {
+pub fn display_progress(base_frame: &Frame, map: &ProgressMap) {
     let mut bar: Vec<WideColor> = vec![
         WideColor {
             r: 0.0,
@@ -176,7 +189,7 @@ pub fn display_progress(base: &Frame, map: &ProgressMap) {
         };
         ROW_LENGTH as usize
     ];
-    let mut new_frame = base.clone();
+    let mut new_frame = get_base(base_frame).clone();
     let mut num_bars: usize = 0;
     let mut colored_leds: u32 = 0;
 
@@ -202,7 +215,7 @@ pub fn display_progress(base: &Frame, map: &ProgressMap) {
     }
 
     for i in 0..colored_leds as usize {
-        new_frame[i] = Color {
+        new_frame[i + COL_OFFSET] = Color {
             r: (bar[i].r / num_bars as f64) as u8,
             g: (bar[i].g / num_bars as f64) as u8,
             b: (bar[i].b / num_bars as f64) as u8,
@@ -213,14 +226,21 @@ pub fn display_progress(base: &Frame, map: &ProgressMap) {
 }
 
 pub fn display_notifications(base_frame: &Frame, notifs: &Vec<Notification>) {
-    let mut frame = base_frame.clone();
-    let mut index = 0;
+    let mut frame = get_base(base_frame).clone();
+    let mut index = COL_OFFSET + 2;
     for notif in notifs {
-        let led_index = xy2num(ROW_LENGTH - 4 + index % 3, index / 4 + 1);
-        frame[led_index] = notif.settings.color;
+        frame[index] = notif.settings.color;
         index += 1;
     }
     fade_into_frame(&frame, 300);
+}
+
+pub fn get_base(base_frame: &Frame) -> &Frame {
+    return if SCREEN_LOCKED.load(Ordering::Relaxed) {
+        &BLACK_SUBSTRATE
+    } else {
+        base_frame
+    };
 }
 
 pub struct KeyMap<'a> {

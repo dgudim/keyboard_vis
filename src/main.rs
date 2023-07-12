@@ -63,7 +63,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             false => *MAIN_COLOR,
         },
     );
-    
+
     for target_dist in 0..CENTER_X * 3 {
         let target_dist_f = target_dist as f64;
 
@@ -90,16 +90,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         fade_into_frame(&intermediate, FRAME_DELTA * 2) // stretch each frame 2 times
     }
 
-    process_dbus(target_substrate)?;
+    *BASE_FRAME.write().unwrap() = target_substrate;
+    process_dbus()?;
 
     Ok(())
 }
 
 fn enq_frame(frame: Frame) -> () {
-    let mut last_frame = LAST_FRAME
-        .write()
-        .expect("Could not lock mutex to write frame");
-    *last_frame = frame.clone();
+    *LAST_FRAME.write().unwrap() = frame.clone();
     match FRAME_Q.push(frame) {
         Ok(_) => {}
         Err(e) => {

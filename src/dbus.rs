@@ -1,18 +1,14 @@
 use std::{
     collections::HashMap,
     error::Error,
-    sync::{
-        atomic::Ordering,
-        Arc, RwLock,
-    },
+    sync::{atomic::Ordering, Arc, RwLock},
     time::Duration,
     vec,
 };
 
 use crate::utils::{
-    display_notifications, display_progress, fade_into_frame, flash_frame, get_frame_by_condition,
-    get_timestamp, num2xy, parse_hex, Frame, Notification, NotificationSettings, ProgressMap,
-    BLACK, BLACK_SUBSTRATE, BLUE, GREEN, PURPLE, RED, ROW_LENGTH, TOP_ROW_LENGTH, WHITE, SCREEN_LOCKED, COL_OFFSET, CYAN,
+    composite, flash_color, get_timestamp, parse_hex, Notification, NotificationSettings,
+    ProgressMap, BLACK, BLUE, CYAN, GREEN, PURPLE, RED, SCREEN_LOCKED, WHITE,
 };
 use dbus::{
     arg::{prop_cast, PropMap},
@@ -29,8 +25,7 @@ fn get_full_match_rule<'a>(interface: &'a str, path: &'a str, member: &'a str) -
     );
 }
 
-pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
-
+pub fn process_dbus() -> Result<(), Box<dyn Error>> {
     // Connect to the D-Bus session bus (this is blocking, unfortunately).
     let conn = Connection::new_session()?;
 
@@ -65,10 +60,10 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
             important: true,
         }),
     );
-    
+
     let notification_delivery_timeout = 2000;
 
-    let mut progress_map = ProgressMap::new();
+    let progress_map = Arc::new(ProgressMap::new());
     progress_map.insert(
         "application://firefox".to_string(),
         (parse_hex("#ff4503"), 0.0),
@@ -129,7 +124,8 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
         ),
     )?;
 
-    let base_frame_p = base_frame.clone();
+    let notification_qc = notification_q.clone();
+    let progress_mapc = progress_map.clone();
     conn.start_receive(
         mr_progress,
         Box::new(move |message: Message, _| {
@@ -144,55 +140,46 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
 
             // flash in special cases
             if progress == 0.0 {
-                let frame_to = get_frame_by_condition(&base_frame_p, &|(index, val)| {
-                    if index < (TOP_ROW_LENGTH + COL_OFFSET) as usize {
-                        return if progress_visible {
-                            if count > 1 {
-                                *GREEN // visible notification with visible progress that has (just started probably)
-                            } else {
-                                *RED // invisible (probably closed) notification with visible progress (idk when this occurs, probably not even on notifications)
-                            }
-                        } else {
-                            if count > 1 {
-                                *BLUE // visible notification without visible progress (idk when this occurs)
-                            } else {
-                                *PURPLE // invisible notification without visible progress (spectacle call, download finished)
-                            }
-                        };
+                let color = if progress_visible {
+                    if count > 1 {
+                        *GREEN // visible notification with visible progress that has (just started probably)
+                    } else {
+                        *RED // invisible (probably closed) notification with visible progress (idk when this occurs, probably not even on notifications)
                     }
-                    return *val;
-                });
-                flash_frame(&frame_to, &base_frame_p, 200, 300, 200);
+                } else {
+                    if count > 1 {
+                        *BLUE // visible notification without visible progress (idk when this occurs)
+                    } else {
+                        *PURPLE // invisible notification without visible progress (spectacle call, download finished)
+                    }
+                };
+                flash_color(color, 350, &progress_mapc, &notification_qc);
             }
 
-            let mut tuple = progress_map
-                .entry(source.to_string())
-                .or_insert((WHITE, 0.0));
-            tuple.1 = progress;
+            {
+                let mut tuple = progress_mapc
+                    .entry(source.to_string())
+                    .or_insert((WHITE, 0.0));
+                tuple.1 = progress;
+            }
 
-            display_progress(&base_frame_p, &progress_map);
+            composite(&progress_mapc, &notification_qc, Option::None);
 
             println!("Notification progress for {source} = {progress}");
             true
         }),
     );
 
-    let base_frame_p = base_frame.clone();
     let screen_locked_p = SCREEN_LOCKED.clone();
+    let notification_qc = notification_q.clone();
+    let progress_map_qc = progress_map.clone();
     conn.start_receive(
         mr_screen,
         Box::new(move |message: Message, _| {
             let locked: bool = message.read1().unwrap();
             println!("Screen locked/unlocked: {locked}");
             screen_locked_p.store(locked, Ordering::Relaxed);
-            fade_into_frame(
-                if locked {
-                    &BLACK_SUBSTRATE
-                } else {
-                    &base_frame_p
-                },
-                1500,
-            );
+            composite(&progress_map_qc, &notification_qc, Option::Some(1500));
             true
         }),
     );
@@ -207,20 +194,18 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
             println!("Notification sent from {application} ({sender}) | {summary}");
             let mut pending_notif_q = pending_notification_qc.write().unwrap();
 
-            match notification_map
-                .get(application.as_str()) {
-                    Some(arc_settings) => {
-                        pending_notif_q.push(Notification {
-                            id: 0,
-                            sender,
-                            timestamp: get_timestamp(),
-                            settings: arc_settings.clone(),
-                        });
-                    },
-                    None => println!("Notification isn't in the map, ignoring"),
-                };
+            match notification_map.get(application.as_str()) {
+                Some(arc_settings) => {
+                    pending_notif_q.push(Notification {
+                        id: 0,
+                        sender,
+                        timestamp: get_timestamp(),
+                        settings: arc_settings.clone(),
+                    });
+                }
+                None => println!("Notification isn't in the map, ignoring"),
+            };
 
-            
             true
         }),
     );
@@ -234,14 +219,15 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
     };
 
     let pending_notification_qc = pending_notification_q.clone();
-    let base_frame_p = base_frame.clone();
+    let notification_qc = notification_q.clone();
+    let progress_map_qc = progress_map.clone();
     conn.start_receive(
         mr_notification_closed,
         Box::new(move |message: Message, _| {
             let (id, reason): (u32, u32) = message.read2().unwrap();
 
             let mut pending_notif_q = pending_notification_qc.write().unwrap();
-            let mut notif_q = notification_q.write().unwrap();
+            let mut notif_q = notification_qc.write().unwrap();
 
             let ind: i64 = find_in_notif_q(id, &pending_notif_q);
 
@@ -257,24 +243,21 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
 
                     if settings.flash_on_auto_close != BLACK {
                         // reason = 1 - expired, 2 - user, 3 - auto, 4 - other
-                        let frame = get_frame_by_condition(&base_frame_p, &|(index, color)| {
-                            let pos = num2xy(index);
-                            if pos.x >= ROW_LENGTH - 4 {
-                                settings.flash_on_auto_close
-                            } else {
-                                *color
-                            }
-                        });
-                        flash_frame(&frame, &base_frame_p, 300, 1000, 300);
+                        flash_color(
+                            settings.flash_on_auto_close,
+                            500,
+                            &progress_map_qc,
+                            &notification_qc,
+                        );
                     }
 
                     if settings.important {
                         notif_q.push(notif);
                         println!("Moved pending notification {id} to display queue");
-                        display_notifications(&base_frame_p, &notif_q);
+                        composite(&progress_map_qc, &notification_qc, Option::None);
                     }
                 }
-                return true
+                return true;
             }
 
             let ind_full: i64 = find_in_notif_q(id, &notif_q);
@@ -282,11 +265,11 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
             if ind_full != -1 {
                 println!(" -=-=- Hidden notification closed by user, id: {id}");
                 notif_q.remove(ind_full as usize);
-                display_notifications(&base_frame_p, &notif_q);
+                composite(&progress_map_qc, &notification_qc, Option::None);
             }
 
             // println!(" !!-=-=-!! Unknown notification closed, id: {id} | reason: {reason}, could not find matching id");
-            
+
             true
         }),
     );
@@ -305,11 +288,7 @@ pub fn process_dbus(base_frame: Frame) -> Result<(), Box<dyn Error>> {
                             println!("Notification delivered, set it id to {id} | reply to {destination}");
                             let settings = &notif.settings;
                             if settings.flash_on_notify {
-                                let frame = get_frame_by_condition(&base_frame, &|(index, color)| {
-                                    let pos = num2xy(index);
-                                    if pos.x >= ROW_LENGTH - 4 { settings.color } else { *color }
-                                });
-                                flash_frame(&frame, &base_frame, 300, 1000, 300);
+                                flash_color(settings.color, 900, &progress_map, &notification_q);
                             }
                         },
                         None => {

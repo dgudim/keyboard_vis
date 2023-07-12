@@ -5,18 +5,19 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, RwLock,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use atomic::Atomic;
 use concurrent_queue::ConcurrentQueue;
 use css_color_parser::Color as CssColor;
+use dashmap::DashMap;
 use once_cell::sync::Lazy;
 use openrgb::data::{Color, LED};
 
 use crate::enq_frame;
 
 pub type LazyColor = Lazy<Color>;
-
 pub type Frame = Vec<Color>;
 pub type LazyFrame = Lazy<Frame>;
 
@@ -34,7 +35,7 @@ pub struct Notification {
     pub timestamp: u128,
 }
 
-pub type ProgressMap = HashMap<String, (Color, f64)>;
+pub type ProgressMap = DashMap<String, (Color, f64)>;
 
 #[derive(Clone)]
 pub struct WideColor {
@@ -107,15 +108,13 @@ pub static GRAY_SUBSTRATE: LazyFrame = Lazy::new(|| vec![GRAY; TOTAL_LEDS as usi
 pub static BLACK_SUBSTRATE: LazyFrame = Lazy::new(|| vec![BLACK; TOTAL_LEDS as usize]);
 
 pub static LAST_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(BLACK_SUBSTRATE.clone()));
+pub static BASE_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(BLACK_SUBSTRATE.clone()));
 pub static FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(|| ConcurrentQueue::unbounded());
-pub static SCREEN_LOCKED: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
-pub const KEYBOARD_NAME: &str = "Razer Ornata Chroma";
 
-pub fn xy2num(x: usize, y: usize) -> usize {
-    let xc = x.clamp(0, ROW_LENGTH - 1);
-    let yc = y.clamp(0, ROWS - 1);
-    return xc + (ROWS - 1 - yc) * ROW_LENGTH;
-}
+pub static SCREEN_LOCKED: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
+pub static FLASH_COLOR: Lazy<Arc<Atomic<Color>>> =
+    Lazy::new(|| Arc::new(Atomic::new(BLACK.clone())));
+pub const KEYBOARD_NAME: &str = "Razer Ornata Chroma";
 
 pub fn num2xy(n: usize) -> Point {
     let nc = n.clamp(0, TOTAL_LEDS);
@@ -144,10 +143,7 @@ pub fn lerp_color(from: &Color, to: &Color, progress: f64) -> Color {
 
 pub fn fade_into_frame(frame_to: &Frame, time_ms: u32) {
     let iterations = time_ms / FRAME_DELTA;
-    let frame_from = LAST_FRAME
-        .read()
-        .expect("Failed reading last frame")
-        .clone(); // dont's cause a deadlock, copy the starting frame
+    let frame_from = LAST_FRAME.read().unwrap().clone(); // dont's cause a deadlock, copy the starting frame
     for i in 1..(iterations + 1) {
         enq_frame(
             frame_from
@@ -168,19 +164,32 @@ pub fn get_timestamp() -> u128 {
         .as_millis();
 }
 
-pub fn flash_frame(
-    frame_to: &Frame,
-    frame_base: &Frame,
-    fade_in_ms: u32,
-    hold: u32,
-    fade_out_ms: u32,
+pub fn flash_color<'a>(
+    color: Color,
+    hold: u64,
+    map: &Arc<ProgressMap>,
+    notifs: &Arc<RwLock<Vec<Notification>>>,
 ) {
-    fade_into_frame(frame_to, fade_in_ms);
-    fade_into_frame(frame_to, hold);
-    fade_into_frame(frame_base, fade_out_ms);
+    FLASH_COLOR.store(color, Ordering::Relaxed);
+    composite(map, notifs, Option::None);
+    let flash_clone = FLASH_COLOR.clone();
+    let mapc = map.clone();
+    let notifsc = notifs.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(hold)).await;
+        flash_clone.store(BLACK, Ordering::Relaxed);
+        composite(&mapc, &notifsc, Option::None);
+    });
 }
 
-pub fn display_progress(base_frame: &Frame, map: &ProgressMap) {
+pub fn composite(
+    map: &ProgressMap,
+    notifs_lock: &RwLock<Vec<Notification>>,
+    fade_time: Option<u32>,
+) {
+    println!("COMPOSITE !");
+    let notifs = notifs_lock.read().unwrap();
+
     let mut bar: Vec<WideColor> = vec![
         WideColor {
             r: 0.0,
@@ -189,18 +198,19 @@ pub fn display_progress(base_frame: &Frame, map: &ProgressMap) {
         };
         ROW_LENGTH as usize
     ];
-    let mut new_frame = get_base(base_frame).clone();
+    let mut new_frame = get_base();
     let mut num_bars: usize = 0;
     let mut colored_leds: u32 = 0;
 
-    for (_, value) in map {
-        let (color, progress) = value;
+    for value in map {
+        let color = value.0;
+        let progress = value.1;
 
-        if *progress <= 0.0 {
+        if progress <= 0.0 {
             continue;
         }
 
-        let scaled_progress = *progress * TOP_ROW_LENGTH as f64;
+        let scaled_progress = progress * TOP_ROW_LENGTH as f64;
         num_bars += 1;
 
         let filled_leds = scaled_progress as usize;
@@ -211,35 +221,39 @@ pub fn display_progress(base_frame: &Frame, map: &ProgressMap) {
         for i in 0..filled_leds {
             bar[i] += color;
         }
-        bar[filled_leds] += lerp_color(&new_frame[filled_leds], color, last_led_progress);
+        bar[filled_leds] += lerp_color(&new_frame[filled_leds], &color, last_led_progress);
     }
 
-    for i in 0..colored_leds as usize {
-        new_frame[i + COL_OFFSET] = Color {
-            r: (bar[i].r / num_bars as f64) as u8,
-            g: (bar[i].g / num_bars as f64) as u8,
-            b: (bar[i].b / num_bars as f64) as u8,
-        };
-    }
+    let flash = FLASH_COLOR.load(Ordering::Relaxed);
 
-    fade_into_frame(&new_frame, 230);
-}
-
-pub fn display_notifications(base_frame: &Frame, notifs: &Vec<Notification>) {
-    let mut frame = get_base(base_frame).clone();
-    let mut index = COL_OFFSET + 2;
-    for notif in notifs {
-        frame[index] = notif.settings.color;
-        index += 1;
-    }
-    fade_into_frame(&frame, 300);
-}
-
-pub fn get_base(base_frame: &Frame) -> &Frame {
-    return if SCREEN_LOCKED.load(Ordering::Relaxed) {
-        &BLACK_SUBSTRATE
+    if flash != BLACK {
+        for i in 0..TOP_ROW_LENGTH as usize {
+            new_frame[i + COL_OFFSET] = flash;
+        }
     } else {
-        base_frame
+        for i in 0..colored_leds as usize {
+            new_frame[i + COL_OFFSET] = Color {
+                r: (bar[i].r / num_bars as f64) as u8,
+                g: (bar[i].g / num_bars as f64) as u8,
+                b: (bar[i].b / num_bars as f64) as u8,
+            };
+        }
+
+        let mut index = COL_OFFSET + 2;
+        for notif in notifs.iter() {
+            new_frame[index] = notif.settings.color;
+            index += 1;
+        }
+    }
+
+    fade_into_frame(&new_frame, fade_time.unwrap_or(300));
+}
+
+pub fn get_base() -> Frame {
+    if SCREEN_LOCKED.load(Ordering::Relaxed) {
+        return BLACK_SUBSTRATE.clone();
+    } else {
+        return BASE_FRAME.read().unwrap().clone();
     };
 }
 
@@ -269,8 +283,4 @@ pub fn get_frame_by_key_names(
             };
         })
         .collect();
-}
-
-pub fn get_frame_by_condition(base_frame: &Frame, f: &dyn Fn((usize, &Color)) -> Color) -> Frame {
-    return base_frame.iter().enumerate().map(f).collect();
 }

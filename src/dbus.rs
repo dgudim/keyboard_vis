@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     error::Error,
+    fs,
     sync::{atomic::Ordering, Arc, RwLock},
     time::Duration,
     vec,
@@ -8,7 +9,7 @@ use std::{
 
 use crate::utils::{
     composite, flash_color, get_timestamp, parse_hex, Notification, NotificationSettings,
-    ProgressMap, BLACK, BLUE, CYAN, GREEN, PURPLE, RED, SCREEN_LOCKED, WHITE, PINK,
+    ProgressMap, BLACK, BLUE, GREEN, PURPLE, RED, SCREEN_LOCKED, WHITE,
 };
 use dbus::{
     arg::{prop_cast, PropMap},
@@ -17,6 +18,7 @@ use dbus::{
     message::MatchRule,
     Message,
 };
+use serde_json::Value;
 
 fn get_full_match_rule<'a>(interface: &'a str, path: &'a str, member: &'a str) -> MatchRule<'a> {
     return MatchRule::with_member(
@@ -33,54 +35,35 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
     let notification_q = Arc::new(RwLock::new(Vec::<Notification>::new()));
 
     let mut notification_map = HashMap::new();
-    notification_map.insert(
-        "Thunderbird",
-        Arc::new(NotificationSettings {
-            color: *BLUE,
-            flash_on_auto_close: *CYAN,
-            flash_on_notify: false,
-            important: true,
-        }),
-    );
-    notification_map.insert(
-        "Telegram Desktop",
-        Arc::new(NotificationSettings {
-            color: WHITE,
-            flash_on_auto_close: *BLUE,
-            flash_on_notify: false,
-            important: true,
-        }),
-    );
-    notification_map.insert(
-        "notify-send",
-        Arc::new(NotificationSettings {
-            color: *RED,
-            flash_on_auto_close: *BLUE,
-            flash_on_notify: true,
-            important: true,
-        }),
-    );
-    notification_map.insert(
-        "discord",
-        Arc::new(NotificationSettings {
-            color: *PURPLE,
-            flash_on_auto_close: *PINK,
-            flash_on_notify: false,
-            important: true,
-        }),
-    );
+    let progress_map = Arc::new(ProgressMap::new());
+
+    let config_j: Value = serde_json::from_str(
+        fs::read_to_string("notification_config.json")
+            .expect("Error reading notification config")
+            .as_str(),
+    )?;
+
+    let config_settings = &config_j["notification_map"].as_object().unwrap();
+    for (key, value) in config_settings.iter() {
+        println!("Loaded {} from notification map", key);
+        notification_map.insert(
+            key.to_owned(),
+            Arc::new(NotificationSettings {
+                color: parse_hex(value["color"].as_str().unwrap()),
+                flash_on_auto_close: parse_hex(value["flash_on_auto_close"].as_str().unwrap()),
+                flash_on_notify: value["flash_on_notify"].as_bool().unwrap(),
+                important: value["important"].as_bool().unwrap(),
+            }),
+        );
+    }
+
+    let config_progress = &config_j["progress_map"].as_object().unwrap();
+    for (key, value) in config_progress.iter() {
+        println!("Loaded {} from progress map", key);
+        progress_map.insert(key.to_owned(), (parse_hex(value.as_str().unwrap()), 0.0));
+    }
 
     let notification_delivery_timeout = 2000;
-
-    let progress_map = Arc::new(ProgressMap::new());
-    progress_map.insert(
-        "application://firefox".to_string(),
-        (parse_hex("#ff4503"), 0.0),
-    );
-    progress_map.insert(
-        "application://org.kde.dolphin".to_string(),
-        (parse_hex("#03c2fc"), 0.0),
-    );
 
     let mr_progress = MatchRule::new_signal("com.canonical.Unity.LauncherEntry", "Update");
     let mr_screen = get_full_match_rule(

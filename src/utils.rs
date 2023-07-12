@@ -100,9 +100,7 @@ pub static NUM_PAD_COLOR: LazyColor = Lazy::new(|| parse_hex("#0094FF"));
 pub const RED: LazyColor = Lazy::new(|| parse_hex("#ff0000"));
 pub const GREEN: LazyColor = Lazy::new(|| parse_hex("#00ff00"));
 pub const BLUE: LazyColor = Lazy::new(|| parse_hex("#0000ff"));
-pub const CYAN: LazyColor = Lazy::new(|| parse_hex("#00ffff"));
 pub const PURPLE: LazyColor = Lazy::new(|| parse_hex("#ff00ff"));
-pub const PINK: LazyColor = Lazy::new(|| parse_hex("#ffaaff"));
 
 pub static GRAY_SUBSTRATE: LazyFrame = Lazy::new(|| vec![GRAY; TOTAL_LEDS as usize]);
 pub static BLACK_SUBSTRATE: LazyFrame = Lazy::new(|| vec![BLACK; TOTAL_LEDS as usize]);

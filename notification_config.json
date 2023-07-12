@@ -1,0 +1,32 @@
+{
+    "notification_map": {
+        "Thunderbird": {
+            "color": "#0000ff",
+            "flash_on_auto_close": "#00ffff",
+            "flash_on_notify": false,
+            "important": true
+        },
+        "Telegram Desktop": {
+            "color": "#ffffff",
+            "flash_on_auto_close": "#0000ff",
+            "flash_on_notify": false,
+            "important": true
+        },
+        "notify-send": {
+            "color": "#ff0000",
+            "flash_on_auto_close": "#0000ff",
+            "flash_on_notify": true,
+            "important": true
+        },
+        "discord": {
+            "color": "#ff00ff",
+            "flash_on_auto_close": "#ffaaff",
+            "flash_on_notify": false,
+            "important": true
+        }
+    },
+    "progress_map": {
+        "application://firefox": "#ff4503",
+        "application://org.kde.dolphin": "#03c2fc"
+    }
+}

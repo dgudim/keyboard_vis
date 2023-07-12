@@ -227,7 +227,6 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             let (id, reason): (u32, u32) = message.read2().unwrap();
 
             let mut pending_notif_q = pending_notification_qc.write().unwrap();
-            let mut notif_q = notification_qc.write().unwrap();
 
             let ind: i64 = find_in_notif_q(id, &pending_notif_q);
 
@@ -252,19 +251,19 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                     }
 
                     if settings.important {
-                        notif_q.push(notif);
+                        notification_qc.write().unwrap().push(notif);
                         println!("Moved pending notification {id} to display queue");
                         composite(&progress_map_qc, &notification_qc, None);
                     }
                 }
                 return true;
             }
-
-            let ind_full: i64 = find_in_notif_q(id, &notif_q);
+            
+            let ind_full: i64 = find_in_notif_q(id, &notification_qc.read().unwrap());
 
             if ind_full != -1 {
                 println!(" -=-=- Hidden notification closed by user, id: {id}");
-                notif_q.remove(ind_full as usize);
+                notification_qc.write().unwrap().remove(ind_full as usize);
                 composite(&progress_map_qc, &notification_qc, None);
             }
 

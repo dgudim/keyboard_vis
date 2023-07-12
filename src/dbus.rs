@@ -163,7 +163,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                 tuple.1 = progress;
             }
 
-            composite(&progress_mapc, &notification_qc, Option::None);
+            composite(&progress_mapc, &notification_qc, None);
 
             println!("Notification progress for {source} = {progress}");
             true
@@ -179,7 +179,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             let locked: bool = message.read1().unwrap();
             println!("Screen locked/unlocked: {locked}");
             screen_locked_p.store(locked, Ordering::Relaxed);
-            composite(&progress_map_qc, &notification_qc, Option::Some(1500));
+            composite(&progress_map_qc, &notification_qc, Some(1500));
             true
         }),
     );
@@ -254,7 +254,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                     if settings.important {
                         notif_q.push(notif);
                         println!("Moved pending notification {id} to display queue");
-                        composite(&progress_map_qc, &notification_qc, Option::None);
+                        composite(&progress_map_qc, &notification_qc, None);
                     }
                 }
                 return true;
@@ -265,7 +265,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             if ind_full != -1 {
                 println!(" -=-=- Hidden notification closed by user, id: {id}");
                 notif_q.remove(ind_full as usize);
-                composite(&progress_map_qc, &notification_qc, Option::None);
+                composite(&progress_map_qc, &notification_qc, None);
             }
 
             // println!(" !!-=-=-!! Unknown notification closed, id: {id} | reason: {reason}, could not find matching id");

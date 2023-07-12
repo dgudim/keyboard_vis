@@ -12,24 +12,37 @@ use tokio::{net::TcpStream, time::sleep};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // connect to default server at localhost
-    let client = OpenRGB::connect().await?;
+    let mut client_opt = None;
+    loop {
+        match OpenRGB::connect().await {
+            Ok(cl) => {
+                client_opt = Some(cl);
+                break;
+            },
+            Err(e) => {
+                println!("{}, retrying in 3 seconds", e);
+                tokio::time::sleep(Duration::from_secs(3)).await
+            }
+        };
+    }
+    let client = client_opt.unwrap();
 
     let controllers = client.get_controller_count().await?;
-    let mut target_controller: Option<Controller> = Option::None;
-    let mut target_controller_id: Option<u32> = Option::None;
+    let mut target_controller: Option<Controller> = None;
+    let mut target_controller_id: Option<u32> = None;
 
     // query and print each controller data
     for controller_id in 0..controllers {
         let controller = client.get_controller(controller_id).await?;
         println!("controller {}: {}", controller_id, controller.name);
         if controller.name.eq(KEYBOARD_NAME) {
-            target_controller = Option::Some(controller);
+            target_controller = Some(controller);
             target_controller_id = Some(controller_id);
             break;
         }
     }
 
-    if target_controller == Option::None {
+    if target_controller == None {
         return Err(format!("{} not found!", KEYBOARD_NAME))?;
     }
 

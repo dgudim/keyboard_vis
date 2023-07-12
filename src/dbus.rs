@@ -8,7 +8,7 @@ use std::{
 
 use crate::utils::{
     composite, flash_color, get_timestamp, parse_hex, Notification, NotificationSettings,
-    ProgressMap, BLACK, BLUE, CYAN, GREEN, PURPLE, RED, SCREEN_LOCKED, WHITE,
+    ProgressMap, BLACK, BLUE, CYAN, GREEN, PURPLE, RED, SCREEN_LOCKED, WHITE, PINK,
 };
 use dbus::{
     arg::{prop_cast, PropMap},
@@ -47,7 +47,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
         Arc::new(NotificationSettings {
             color: WHITE,
             flash_on_auto_close: *BLUE,
-            flash_on_notify: true,
+            flash_on_notify: false,
             important: true,
         }),
     );
@@ -57,6 +57,15 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             color: *RED,
             flash_on_auto_close: *BLUE,
             flash_on_notify: true,
+            important: true,
+        }),
+    );
+    notification_map.insert(
+        "discord",
+        Arc::new(NotificationSettings {
+            color: *PURPLE,
+            flash_on_auto_close: *PINK,
+            flash_on_notify: false,
             important: true,
         }),
     );
@@ -258,7 +267,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                 }
                 return true;
             }
-            
+
             let ind_full: i64 = find_in_notif_q(id, &notification_qc.read().unwrap());
 
             if ind_full != -1 {

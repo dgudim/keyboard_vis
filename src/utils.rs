@@ -91,11 +91,11 @@ pub const GRAY: Color = Color {
     b: 80,
 };
 
-pub static MAIN_COLOR: LazyColor = Lazy::new(|| parse_hex("#df3b00"));
-pub static TOP_ROW_COLOR: LazyColor = Lazy::new(|| parse_hex("#FFD800"));
-pub static FUNCTION_COLOR: LazyColor = Lazy::new(|| parse_hex("#B200FF"));
-pub static FUNCTION_COLOR2: LazyColor = Lazy::new(|| parse_hex("#B200AA"));
-pub static NUM_PAD_COLOR: LazyColor = Lazy::new(|| parse_hex("#0094FF"));
+pub static MAIN_COLOR: LazyColor = Lazy::new(|| parse_hex("#9e2000"));
+pub static TOP_ROW_COLOR: LazyColor = Lazy::new(|| parse_hex("#d19900"));
+pub static FUNCTION_COLOR: LazyColor = Lazy::new(|| parse_hex("#7800ab"));
+pub static FUNCTION_COLOR2: LazyColor = Lazy::new(|| parse_hex("#8a0084"));
+pub static NUM_PAD_COLOR: LazyColor = Lazy::new(|| parse_hex("#005da1"));
 
 pub const RED: LazyColor = Lazy::new(|| parse_hex("#ff0000"));
 pub const GREEN: LazyColor = Lazy::new(|| parse_hex("#00ff00"));

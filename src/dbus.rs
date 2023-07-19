@@ -130,6 +130,17 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             let progress_visible: bool = *prop_cast(&props, "progress-visible").unwrap_or(&true);
             let count: i32 = *prop_cast(&props, "count").unwrap_or(&0);
 
+            let progress_changed;
+            {
+                let mut tuple = progress_mapc
+                    .entry(source.to_string())
+                    .or_insert((WHITE, 0.0));
+                progress_changed = tuple.1 != progress;
+                tuple.1 = progress;
+
+                println!("Notification progress for {source} = {progress}");
+            }
+
             // flash in special cases
             if progress == 0.0 {
                 let color = if progress_visible {
@@ -146,19 +157,12 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 flash_color(color, 350, &progress_mapc, &notification_qc);
+            } else if progress_changed {
+                // recomposite if progress changed to not cause stalled animations
+                composite(&progress_mapc, &notification_qc, None);
             }
 
-            {
-                let mut tuple = progress_mapc
-                    .entry(source.to_string())
-                    .or_insert((WHITE, 0.0));
-                tuple.1 = progress;
-            }
-
-            composite(&progress_mapc, &notification_qc, None);
-
-            println!("Notification progress for {source} = {progress}");
-            true
+            return true;
         }),
     );
 
@@ -221,13 +225,11 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             let mut pending_notif_q = pending_notification_qc.write().unwrap();
 
             let ind: i64 = find_in_notif_q(id, &pending_notif_q);
-
+            
             if ind != -1 {
                 let notif = pending_notif_q.remove(ind as usize);
 
-                if reason == 2 {
-                    println!(" -=-=- Pending notification closed by user, id: {id}");
-                } else {
+                if reason == 1 {
                     println!(" -=-=- Pending notification closed automatically, id: {id}");
 
                     let settings = &notif.settings;
@@ -247,6 +249,9 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                         println!("Moved pending notification {id} to display queue");
                         composite(&progress_map_qc, &notification_qc, None);
                     }
+
+                } else {
+                    println!(" -=-=- Pending notification closed by user or automatically, id: {id} | reason: {reason}");
                 }
                 return true;
             }
@@ -254,7 +259,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             let ind_full: i64 = find_in_notif_q(id, &notification_qc.read().unwrap());
 
             if ind_full != -1 {
-                println!(" -=-=- Hidden notification closed by user, id: {id}");
+                println!(" -=-=- Hidden notification closed id: {id} | reason: {reason}");
                 notification_qc.write().unwrap().remove(ind_full as usize);
                 composite(&progress_map_qc, &notification_qc, None);
             }

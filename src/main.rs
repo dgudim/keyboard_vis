@@ -12,7 +12,7 @@ use tokio::{net::TcpStream, time::sleep};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // connect to default server at localhost
-    let mut client_opt = None;
+    let client_opt;
     loop {
         match OpenRGB::connect().await {
             Ok(cl) => {

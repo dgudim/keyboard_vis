@@ -167,7 +167,7 @@ pub fn flash_color<'a>(
     hold: u64,
     map: &Arc<ProgressMap>,
     notifs: &Arc<RwLock<Vec<Notification>>>,
-) {
+) -> bool {
     FLASH_COLOR.store(color, Ordering::Relaxed);
     composite(map, notifs, Option::None);
     let flash_clone = FLASH_COLOR.clone();
@@ -178,13 +178,14 @@ pub fn flash_color<'a>(
         flash_clone.store(BLACK, Ordering::Relaxed);
         composite(&mapc, &notifsc, Option::None);
     });
+    return true;
 }
 
 pub fn composite(
     map: &ProgressMap,
     notifs_lock: &RwLock<Vec<Notification>>,
     fade_time: Option<u32>,
-) {
+) -> bool {
     println!("COMPOSITE !");
     let notifs = notifs_lock.read().unwrap();
 
@@ -245,6 +246,7 @@ pub fn composite(
     }
 
     fade_into_frame(&new_frame, fade_time.unwrap_or(300));
+    return true;
 }
 
 pub fn get_base() -> Frame {

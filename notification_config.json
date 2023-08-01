@@ -12,12 +12,6 @@
             "flash_on_notify": false,
             "important": true
         },
-        "notify-send": {
-            "color": "#ff0000",
-            "flash_on_auto_close": "#0000ff",
-            "flash_on_notify": true,
-            "important": true
-        },
         "discord": {
             "color": "#ff00ff",
             "flash_on_auto_close": "#ffaaff",

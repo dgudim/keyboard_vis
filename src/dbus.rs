@@ -130,12 +130,12 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             let progress_visible: bool = *prop_cast(&props, "progress-visible").unwrap_or(&true);
             let count: i32 = *prop_cast(&props, "count").unwrap_or(&0);
 
-            let progress_changed;
+            let progress_delta;
             {
                 let mut tuple = progress_mapc
                     .entry(source.to_string())
                     .or_insert((WHITE, 0.0));
-                progress_changed = tuple.1 != progress;
+                progress_delta = (tuple.1 - progress).abs();
                 tuple.1 = progress;
 
                 println!("Notification progress for {source} = {progress}");
@@ -157,7 +157,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 flash_color(color, 350, &progress_mapc, &notification_qc);
-            } else if progress_changed {
+            } else if progress_delta > 0.07 {
                 // recomposite if progress changed to not cause stalled animations
                 composite(&progress_mapc, &notification_qc, None);
             }

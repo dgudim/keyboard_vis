@@ -9,7 +9,7 @@ use std::{
 
 use crate::utils::{
     composite, flash_color, get_timestamp, parse_hex, Notification, NotificationSettings,
-    ProgressMap, BLACK, BLUE, GREEN, PURPLE, RED, SCREEN_LOCKED, WHITE,
+    ProgressMap, BLACK, BLUE, GREEN, PURPLE, RED, SCREEN_LOCKED, WHITE, PROGRESS_STEP,
 };
 use dbus::{
     arg::{prop_cast, PropMap},
@@ -136,7 +136,10 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                     .entry(source.to_string())
                     .or_insert((WHITE, 0.0));
                 progress_delta = (tuple.1 - progress).abs();
-                tuple.1 = progress;
+
+                if progress_delta > PROGRESS_STEP {
+                    tuple.1 = progress;
+                }
 
                 println!("Notification progress for {source} = {progress}");
             }
@@ -157,7 +160,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                     }
                 };
                 flash_color(color, 350, &progress_mapc, &notification_qc);
-            } else if progress_delta > 0.07 {
+            } else if progress_delta > PROGRESS_STEP {
                 // recomposite if progress changed to not cause stalled animations
                 composite(&progress_mapc, &notification_qc, None);
             }
@@ -247,7 +250,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                     if settings.important {
                         notification_qc.write().unwrap().push(notif);
                         println!("Moved pending notification {id} to display queue");
-                        composite(&progress_map_qc, &notification_qc, None);
+                        composite(&progress_map_qc, &notification_qc, Some(200));
                     }
 
                 } else {
@@ -261,7 +264,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             if ind_full != -1 {
                 println!(" -=-=- Hidden notification closed id: {id} | reason: {reason}");
                 notification_qc.write().unwrap().remove(ind_full as usize);
-                composite(&progress_map_qc, &notification_qc, None);
+                composite(&progress_map_qc, &notification_qc, Some(200));
             }
 
             // println!(" !!-=-=-!! Unknown notification closed, id: {id} | reason: {reason}, could not find matching id");

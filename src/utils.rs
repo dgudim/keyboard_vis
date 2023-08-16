@@ -113,6 +113,7 @@ pub static SCREEN_LOCKED: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBo
 pub static FLASH_COLOR: Lazy<Arc<Atomic<Color>>> =
     Lazy::new(|| Arc::new(Atomic::new(BLACK.clone())));
 pub const KEYBOARD_NAME: &str = "Razer Ornata Chroma";
+pub const PROGRESS_STEP: f64 = 0.0; // minimum value for progress delta to call a recomposite 
 
 pub fn num2xy(n: usize) -> Point {
     let nc = n.clamp(0, TOTAL_LEDS);
@@ -169,14 +170,14 @@ pub fn flash_color<'a>(
     notifs: &Arc<RwLock<Vec<Notification>>>,
 ) -> bool {
     FLASH_COLOR.store(color, Ordering::Relaxed);
-    composite(map, notifs, Option::None);
+    composite(map, notifs, Some(300));
     let flash_clone = FLASH_COLOR.clone();
     let mapc = map.clone();
     let notifsc = notifs.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(hold)).await;
         flash_clone.store(BLACK, Ordering::Relaxed);
-        composite(&mapc, &notifsc, Option::None);
+        composite(&mapc, &notifsc, Some(300));
     });
     return true;
 }
@@ -245,7 +246,7 @@ pub fn composite(
         }
     }
 
-    fade_into_frame(&new_frame, fade_time.unwrap_or(300));
+    fade_into_frame(&new_frame, fade_time.unwrap_or(110));
     return true;
 }
 

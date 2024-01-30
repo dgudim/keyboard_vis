@@ -42,8 +42,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if target_controller == None {
-        return Err(format!("{} not found!", KEYBOARD_NAME))?;
+    if target_controller.is_none() {
+        Err(format!("{} not found!", KEYBOARD_NAME))?
     }
 
     tokio::spawn(async move {
@@ -60,20 +60,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Vec::from([
             KeyMap {
                 keys: Vec::from(["Key: Number Pad", "Key: Num Lock"]),
-                color: *NUM_PAD_COLOR,
+                color: NUM_PAD_COLOR,
             },
             KeyMap {
                 keys: Vec::from(["Insert", "Delete", "Page", "Arrow", "End", "Home"]),
-                color: *FUNCTION_COLOR,
+                color: FUNCTION_COLOR,
             },
             KeyMap {
                 keys: Vec::from(["Print", "Scroll", "Pause"]),
-                color: *FUNCTION_COLOR2,
+                color: FUNCTION_COLOR2,
             },
         ]),
         &|_: &LED, index: usize| match index <= 14 {
-            true => *TOP_ROW_COLOR,
-            false => *MAIN_COLOR,
+            true => TOP_ROW_COLOR,
+            false => MAIN_COLOR,
         },
     );
 
@@ -96,7 +96,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
 
                 let distance_factor = (distance_from_center - target_dist_f) / 2.0;
-                return lerp_color(&WHITE, &BLACK, distance_factor);
+                lerp_color(&WHITE, &BLACK, distance_factor)
             })
             .collect();
 
@@ -109,7 +109,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn enq_frame(frame: Frame) -> () {
+fn enq_frame(frame: Frame) {
     *LAST_FRAME.write().unwrap() = frame.clone();
     match FRAME_Q.push(frame) {
         Ok(_) => {}
@@ -122,11 +122,8 @@ fn enq_frame(frame: Frame) -> () {
 async fn render_frames(id: u32, client: &OpenRGB<TcpStream>) -> Result<(), Box<dyn Error>> {
     let frame_delay = Duration::from_millis(FRAME_DELTA as u64);
     loop {
-        match FRAME_Q.pop() {
-            Ok(frame) => {
-                client.update_leds(id, frame).await?;
-            }
-            Err(_) => {}
+        if let Ok(frame) = FRAME_Q.pop() {
+            client.update_leds(id, frame).await?;
         };
 
         sleep(frame_delay).await;

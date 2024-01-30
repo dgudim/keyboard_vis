@@ -122,10 +122,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
         mr_progress,
         Box::new(move |message: Message, _| {
             let (source, props): (&str, PropMap) = message.read2().unwrap();
-            if !props.contains_key("progress") {
-                true;
-            }
-
+            
             let progress: f64 = *prop_cast(&props, "progress").unwrap_or(&0.0);
             let progress_visible: bool = *prop_cast(&props, "progress-visible").unwrap_or(&true);
             let count: i32 = *prop_cast(&props, "count").unwrap_or(&0);
@@ -148,24 +145,21 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             if progress == 0.0 {
                 let color = if progress_visible {
                     if count > 1 {
-                        *GREEN // visible notification with visible progress that has (just started probably)
+                        GREEN // visible notification with visible progress that has (just started probably)
                     } else {
-                        *RED // invisible (probably closed) notification with visible progress (idk when this occurs, probably not even on notifications)
+                        RED // invisible (probably closed) notification with visible progress (idk when this occurs, probably not even on notifications)
                     }
+                } else if count > 1 {
+                    BLUE // visible notification without visible progress (idk when this occurs)
                 } else {
-                    if count > 1 {
-                        *BLUE // visible notification without visible progress (idk when this occurs)
-                    } else {
-                        *PURPLE // invisible notification without visible progress (spectacle call, download finished)
-                    }
+                    PURPLE // invisible notification without visible progress (spectacle call, download finished)
                 };
                 flash_color(color, 350, &progress_mapc, &notification_qc);
             } else if progress_delta > PROGRESS_STEP {
                 // recomposite if progress changed to not cause stalled animations
                 composite(&progress_mapc, &notification_qc, None);
             }
-
-            return true;
+            true
         }),
     );
 

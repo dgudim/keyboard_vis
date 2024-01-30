@@ -8,6 +8,7 @@ use std::{
 };
 
 use atomic::Atomic;
+use color_hex::color_from_hex;
 use concurrent_queue::ConcurrentQueue;
 use css_color_parser::Color as CssColor;
 use dashmap::DashMap;
@@ -16,7 +17,6 @@ use openrgb::data::{Color, LED};
 
 use crate::enq_frame;
 
-pub type LazyColor = Lazy<Color>;
 pub type Frame = Vec<Color>;
 pub type LazyFrame = Lazy<Frame>;
 
@@ -90,54 +90,68 @@ pub const GRAY: Color = Color {
     g: 65,
     b: 80,
 };
+pub const DIM_GRAY: Color = Color {
+    r: 40,
+    g: 35,
+    b: 40,
+};
 
-pub static MAIN_COLOR: LazyColor = Lazy::new(|| parse_hex("#9e2000"));
-pub static TOP_ROW_COLOR: LazyColor = Lazy::new(|| parse_hex("#d19900"));
-pub static FUNCTION_COLOR: LazyColor = Lazy::new(|| parse_hex("#7800ab"));
-pub static FUNCTION_COLOR2: LazyColor = Lazy::new(|| parse_hex("#8a0084"));
-pub static NUM_PAD_COLOR: LazyColor = Lazy::new(|| parse_hex("#005da1"));
+pub const MAIN_COLOR: Color = u8_to_col(color_from_hex!("#9e2000"));
+pub const TOP_ROW_COLOR: Color = u8_to_col(color_from_hex!("#d19900"));
+pub const FUNCTION_COLOR: Color = u8_to_col(color_from_hex!("#7800ab"));
+pub const FUNCTION_COLOR2: Color = u8_to_col(color_from_hex!("#8a0084"));
+pub const NUM_PAD_COLOR: Color = u8_to_col(color_from_hex!("#005da1"));
 
-pub const RED: LazyColor = Lazy::new(|| parse_hex("#ff0000"));
-pub const GREEN: LazyColor = Lazy::new(|| parse_hex("#00ff00"));
-pub const BLUE: LazyColor = Lazy::new(|| parse_hex("#0000ff"));
-pub const PURPLE: LazyColor = Lazy::new(|| parse_hex("#ff00ff"));
+pub const RED: Color = u8_to_col(color_from_hex!("#ff0000"));
+pub const GREEN: Color = u8_to_col(color_from_hex!("#00ff00"));
+pub const BLUE: Color = u8_to_col(color_from_hex!("#0000ff"));
+pub const PURPLE: Color = u8_to_col(color_from_hex!("#ff00ff"));
 
-pub static GRAY_SUBSTRATE: LazyFrame = Lazy::new(|| vec![GRAY; TOTAL_LEDS as usize]);
-pub static BLACK_SUBSTRATE: LazyFrame = Lazy::new(|| vec![BLACK; TOTAL_LEDS as usize]);
+pub static GRAY_SUBSTRATE: LazyFrame = Lazy::new(|| vec![GRAY; TOTAL_LEDS]);
+pub static DIM_GRAY_SUBSTRATE: LazyFrame = Lazy::new(|| vec![DIM_GRAY; TOTAL_LEDS]);
+pub static BLACK_SUBSTRATE: LazyFrame = Lazy::new(|| vec![BLACK; TOTAL_LEDS]);
 
 pub static LAST_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(BLACK_SUBSTRATE.clone()));
 pub static BASE_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(BLACK_SUBSTRATE.clone()));
-pub static FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(|| ConcurrentQueue::unbounded());
+pub static FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(ConcurrentQueue::unbounded);
 
 pub static SCREEN_LOCKED: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
 pub static FLASH_COLOR: Lazy<Arc<Atomic<Color>>> =
-    Lazy::new(|| Arc::new(Atomic::new(BLACK.clone())));
+    Lazy::new(|| Arc::new(Atomic::new(BLACK)));
 pub const KEYBOARD_NAME: &str = "Razer Ornata Chroma";
-pub const PROGRESS_STEP: f64 = 0.0; // minimum value for progress delta to call a recomposite 
+pub const PROGRESS_STEP: f64 = 0.0; // minimum value for progress delta to call a recomposite
 
 pub fn num2xy(n: usize) -> Point {
     let nc = n.clamp(0, TOTAL_LEDS);
     let y = nc / ROW_LENGTH;
     let x = nc - y * ROW_LENGTH;
-    return Point { x, y: ROWS - y - 1 };
+    Point { x, y: ROWS - y - 1 }
+}
+
+pub const fn u8_to_col(arr: [u8; 3]) -> Color {
+    Color {
+        r: arr[0],
+        g: arr[1],
+        b: arr[2],
+    }
 }
 
 pub fn parse_hex(col: &str) -> Color {
     let css_col = col.parse::<CssColor>().unwrap_or(TRANSPARENT_BLACK);
-    return Color {
+    Color {
         r: css_col.r,
         g: css_col.g,
         b: css_col.b,
-    };
+    }
 }
 
 pub fn lerp_color(from: &Color, to: &Color, progress: f64) -> Color {
     let progress_01 = progress.clamp(0.0, 1.0);
-    return Color {
+    Color {
         r: (from.r as f64 * (1.0 - progress_01) + to.r as f64 * progress_01) as u8,
         g: (from.g as f64 * (1.0 - progress_01) + to.g as f64 * progress_01) as u8,
         b: (from.b as f64 * (1.0 - progress_01) + to.b as f64 * progress_01) as u8,
-    };
+    }
 }
 
 pub fn fade_into_frame(frame_to: &Frame, time_ms: u32) {
@@ -149,7 +163,7 @@ pub fn fade_into_frame(frame_to: &Frame, time_ms: u32) {
                 .iter()
                 .enumerate()
                 .map(|(index, color_from)| -> Color {
-                    return lerp_color(color_from, &frame_to[index], i as f64 / iterations as f64);
+                    lerp_color(color_from, &frame_to[index], i as f64 / iterations as f64)
                 })
                 .collect(),
         );
@@ -157,13 +171,13 @@ pub fn fade_into_frame(frame_to: &Frame, time_ms: u32) {
 }
 
 pub fn get_timestamp() -> u128 {
-    return SystemTime::now()
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards")
-        .as_millis();
+        .as_millis()
 }
 
-pub fn flash_color<'a>(
+pub fn flash_color(
     color: Color,
     hold: u64,
     map: &Arc<ProgressMap>,
@@ -179,7 +193,7 @@ pub fn flash_color<'a>(
         flash_clone.store(BLACK, Ordering::Relaxed);
         composite(&mapc, &notifsc, Some(300));
     });
-    return true;
+    true
 }
 
 pub fn composite(
@@ -196,7 +210,7 @@ pub fn composite(
             g: 0.0,
             b: 0.0
         };
-        ROW_LENGTH as usize
+        ROW_LENGTH
     ];
     let mut new_frame = get_base();
     let mut num_bars: usize = 0;
@@ -218,16 +232,16 @@ pub fn composite(
 
         let last_led_progress = scaled_progress - filled_leds as f64;
 
-        for i in 0..filled_leds {
+        (0..filled_leds).for_each(|i| {
             bar[i] += color;
-        }
+        });
         bar[filled_leds] += lerp_color(&new_frame[filled_leds], &color, last_led_progress);
     }
 
     let flash = FLASH_COLOR.load(Ordering::Relaxed);
 
     if flash != BLACK {
-        for i in 0..TOP_ROW_LENGTH as usize {
+        for i in 0..TOP_ROW_LENGTH {
             new_frame[i + COL_OFFSET] = flash;
         }
     } else {
@@ -247,15 +261,15 @@ pub fn composite(
     }
 
     fade_into_frame(&new_frame, fade_time.unwrap_or(110));
-    return true;
+    true
 }
 
 pub fn get_base() -> Frame {
     if SCREEN_LOCKED.load(Ordering::Relaxed) {
-        return BLACK_SUBSTRATE.clone();
+        DIM_GRAY_SUBSTRATE.clone()
     } else {
-        return BASE_FRAME.read().unwrap().clone();
-    };
+        BASE_FRAME.read().unwrap().clone()
+    }
 }
 
 pub struct KeyMap<'a> {
@@ -264,7 +278,7 @@ pub struct KeyMap<'a> {
 }
 
 pub fn get_frame_by_key_names(
-    leds: &Vec<LED>,
+    leds: &[LED],
     map: Vec<KeyMap>,
     fallback_function: &dyn Fn(&LED, usize) -> Color,
 ) -> Frame {
@@ -278,10 +292,10 @@ pub fn get_frame_by_key_names(
                     .iter()
                     .any(|key_substr| led.name.contains(key_substr))
             });
-            return match mapping {
+            match mapping {
                 Some(map) => map.color,
-                None => fallback_function(&led, index),
-            };
+                None => fallback_function(led, index),
+            }
         })
         .collect();
 }

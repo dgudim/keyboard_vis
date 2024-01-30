@@ -7,10 +7,9 @@
 > This is my first project written in rust, so it's kinda goofy, don't judge
 
 ## Features
-- Works with any OpenRGB supported device
-- Display important notifications on the device (keyboard is quite handy)
-- Display download/file copy progress on the device
-- Dim the device after locking the screen
+- Display important notifications on the keyboard
+- Display download/file copy progress on the keyboard
+- Dim the keyboard after locking the screen
 - Cool animation on startup
 
 ## Running 

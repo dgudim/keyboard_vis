@@ -12,6 +12,7 @@ use color_hex::color_from_hex;
 use concurrent_queue::ConcurrentQueue;
 use css_color_parser::Color as CssColor;
 use dashmap::DashMap;
+use log::info;
 use once_cell::sync::Lazy;
 use openrgb::data::{Color, LED};
 
@@ -63,15 +64,22 @@ pub struct Point {
 }
 
 pub const ROW_LENGTH: usize = 22;
-pub const COL_OFFSET: usize = 1;
-pub const TOP_ROW_LENGTH: usize = ROW_LENGTH - 4 - COL_OFFSET;
-pub const ROWS: usize = 6;
-pub const TOTAL_LEDS: usize = ROW_LENGTH * ROWS;
+pub const ROW_COUNT: usize = 6;
+pub const TOTAL_LEDS: usize = ROW_LENGTH * ROW_COUNT;
+
+// Workarounds quirks in some keyboards (skip esc key, etc) this offsets the starting position of the top bar
+pub const COL_OFFSET_START: usize = 1;
+// The same, but fo the end of the top bar
+pub const COL_OFFSET_END: usize = 4;
+pub const TOP_ROW_LENGTH: usize = ROW_LENGTH - COL_OFFSET_END - COL_OFFSET_START;
+
 pub const CENTER_X: i64 = (ROW_LENGTH / 2) as i64;
-pub const CENTER_Y: i64 = (ROWS / 2) as i64;
+pub const CENTER_Y: i64 = (ROW_COUNT / 2) as i64;
 
-pub const FRAME_DELTA: u32 = 75;
+// How many ms per frame
+pub const FRAME_DURATION_MS: u32 = 75;
 
+// Define some constants (colors)
 pub const TRANSPARENT_BLACK: CssColor = CssColor {
     r: 0,
     g: 0,
@@ -115,17 +123,23 @@ pub static LAST_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(BLACK_SUBS
 pub static BASE_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(BLACK_SUBSTRATE.clone()));
 pub static FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(ConcurrentQueue::unbounded);
 
+// Arc for screen lock state and flash color
 pub static SCREEN_LOCKED: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
-pub static FLASH_COLOR: Lazy<Arc<Atomic<Color>>> =
-    Lazy::new(|| Arc::new(Atomic::new(BLACK)));
+pub static FLASH_COLOR: Lazy<Arc<Atomic<Color>>> = Lazy::new(|| Arc::new(Atomic::new(BLACK)));
+// TODO: This should be in a config somewhere
 pub const KEYBOARD_NAME: &str = "Razer Ornata Chroma";
-pub const PROGRESS_STEP: f64 = 0.0; // minimum value for progress delta to call a recomposite
+// Minimum value for progress delta to cause a recomposite
+pub const PROGRESS_STEP: f64 = 0.0;
 
+// Index of the led into xy coordinates
 pub fn num2xy(n: usize) -> Point {
     let nc = n.clamp(0, TOTAL_LEDS);
     let y = nc / ROW_LENGTH;
     let x = nc - y * ROW_LENGTH;
-    Point { x, y: ROWS - y - 1 }
+    Point {
+        x,
+        y: ROW_COUNT - y - 1,
+    }
 }
 
 pub const fn u8_to_col(arr: [u8; 3]) -> Color {
@@ -154,16 +168,20 @@ pub fn lerp_color(from: &Color, to: &Color, progress: f64) -> Color {
     }
 }
 
-pub fn fade_into_frame(frame_to: &Frame, time_ms: u32) {
-    let iterations = time_ms / FRAME_DELTA;
-    let frame_from = LAST_FRAME.read().unwrap().clone(); // dont's cause a deadlock, copy the starting frame
+pub fn fade_into_frame(frame_to: &Frame, fade_time_ms: u32) {
+    // Calculate how many steps we need to take
+    let iterations = fade_time_ms / FRAME_DURATION_MS;
+    // don't cause a deadlock (by later inserting into the same map), copy the starting frame
+    let frame_from = LAST_FRAME.read().unwrap().clone();
+    // Iterate (+1 to immediately start changing, 0 = starting frame)
     for i in 1..(iterations + 1) {
+        // Add frame to the queue
         enq_frame(
             frame_from
                 .iter()
-                .enumerate()
-                .map(|(index, color_from)| -> Color {
-                    lerp_color(color_from, &frame_to[index], i as f64 / iterations as f64)
+                .zip(frame_to.iter())
+                .map(|(color_from, color_to)| -> Color {
+                    lerp_color(color_from, color_to, i as f64 / iterations as f64)
                 })
                 .collect(),
         );
@@ -171,6 +189,7 @@ pub fn fade_into_frame(frame_to: &Frame, time_ms: u32) {
 }
 
 pub fn get_timestamp() -> u128 {
+    // Self-explanatory
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("Time went backwards")
@@ -180,31 +199,45 @@ pub fn get_timestamp() -> u128 {
 pub fn flash_color(
     color: Color,
     hold: u64,
-    map: &Arc<ProgressMap>,
-    notifs: &Arc<RwLock<Vec<Notification>>>,
+    progress_map: &Arc<ProgressMap>,
+    notifications: &Arc<RwLock<Vec<Notification>>>,
 ) -> bool {
+    // Store the target color right away
     FLASH_COLOR.store(color, Ordering::Relaxed);
-    composite(map, notifs, Some(300));
-    let flash_clone = FLASH_COLOR.clone();
-    let mapc = map.clone();
-    let notifsc = notifs.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(hold)).await;
-        flash_clone.store(BLACK, Ordering::Relaxed);
-        composite(&mapc, &notifsc, Some(300));
+    // Animate! (300ms)
+    composite(progress_map, notifications, Some(300));
+
+    tokio::spawn({
+        // Copy the Arc to move it into the deferred function call
+        let flash_clone = FLASH_COLOR.clone();
+        // Also copy Arcs for the progress map and notifications
+        let progress_map_clone = progress_map.clone();
+        let notifications_clone = notifications.clone();
+        // Move them into the closure
+        async move {
+            // Wait for specified amount of time
+            tokio::time::sleep(Duration::from_millis(hold)).await;
+            // Store black frame (flash off)
+            flash_clone.store(BLACK, Ordering::Relaxed);
+            // Animate!
+            composite(&progress_map_clone, &notifications_clone, Some(300));
+        }
     });
     true
 }
 
 pub fn composite(
-    map: &ProgressMap,
-    notifs_lock: &RwLock<Vec<Notification>>,
-    fade_time: Option<u32>,
+    progress_map: &ProgressMap,
+    notifications_lock: &RwLock<Vec<Notification>>,
+    fade_time_ms: Option<u32>,
 ) -> bool {
-    println!("COMPOSITE !");
-    let notifs = notifs_lock.read().unwrap();
+    info!("COMPOSITE !");
+    // Get the contents from the RwLock
+    let notifications = notifications_lock.read().unwrap();
 
-    let mut bar: Vec<WideColor> = vec![
+    // This is the array that will hold colors of the loading bar at the top of the keyboard
+    // Initialise it to black initially
+    let mut top_bar: Vec<WideColor> = vec![
         WideColor {
             r: 0.0,
             g: 0.0,
@@ -212,55 +245,71 @@ pub fn composite(
         };
         ROW_LENGTH
     ];
+    // Start from the base frame
     let mut new_frame = get_base();
+    // How many loading bars d we have
     let mut num_bars: usize = 0;
+    // How many colored(filled) leds do we have
     let mut colored_leds: u32 = 0;
 
-    for value in map {
-        let color = value.0;
-        let progress = value.1;
+    for progress_tuple in progress_map {
+        let color = progress_tuple.0;
+        let progress = progress_tuple.1;
 
+        // Skip if the progress is at 0
         if progress <= 0.0 {
             continue;
         }
-
-        let scaled_progress = progress * TOP_ROW_LENGTH as f64;
+        // This loading bar is good, increment the count
         num_bars += 1;
 
+        // Scale to fill the entire top row
+        let scaled_progress = progress * TOP_ROW_LENGTH as f64;
+        // Remove the floating part
         let filled_leds = scaled_progress as usize;
+        // Update the number of colored leds (take maximum)
         colored_leds = colored_leds.max(scaled_progress.ceil() as u32);
 
+        // Calculate the progress of the last led (fade smoothly)
         let last_led_progress = scaled_progress - filled_leds as f64;
 
+        // Add color to the bar
         (0..filled_leds).for_each(|i| {
-            bar[i] += color;
+            top_bar[i] += color;
         });
-        bar[filled_leds] += lerp_color(&new_frame[filled_leds], &color, last_led_progress);
+        // Lerp the last led, we can index into filled_leds because COL_OFFSET_END is 4 and top bar is always has some headroom
+        // TODO: Check properly
+        top_bar[filled_leds] += lerp_color(&new_frame[filled_leds], &color, last_led_progress);
     }
 
+    // Get the flash color
     let flash = FLASH_COLOR.load(Ordering::Relaxed);
 
     if flash != BLACK {
+        // We need to flash
         for i in 0..TOP_ROW_LENGTH {
-            new_frame[i + COL_OFFSET] = flash;
+            // Fill the top bar
+            new_frame[i + COL_OFFSET_START] = flash;
         }
     } else {
+        // Normalise the color
         for i in 0..colored_leds as usize {
-            new_frame[i + COL_OFFSET] = Color {
-                r: (bar[i].r / num_bars as f64) as u8,
-                g: (bar[i].g / num_bars as f64) as u8,
-                b: (bar[i].b / num_bars as f64) as u8,
+            new_frame[i + COL_OFFSET_START] = Color {
+                r: (top_bar[i].r / num_bars as f64) as u8,
+                g: (top_bar[i].g / num_bars as f64) as u8,
+                b: (top_bar[i].b / num_bars as f64) as u8,
             };
         }
 
-        let mut index = COL_OFFSET + 2;
-        for notif in notifs.iter() {
-            new_frame[index] = notif.settings.color;
+        let mut index = COL_OFFSET_START + 2;
+        for notification in notifications.iter() {
+            new_frame[index] = notification.settings.color;
             index += 1;
         }
     }
 
-    fade_into_frame(&new_frame, fade_time.unwrap_or(110));
+    // Finally fade into the new frame
+    fade_into_frame(&new_frame, fade_time_ms.unwrap_or(110));
     true
 }
 
@@ -277,16 +326,18 @@ pub struct KeyMap<'a> {
     pub color: Color,
 }
 
+// Map keyboard key names to colors
 pub fn get_frame_by_key_names(
     leds: &[LED],
-    map: Vec<KeyMap>,
+    keymaps: Vec<KeyMap>,
     fallback_function: &dyn Fn(&LED, usize) -> Color,
 ) -> Frame {
     return leds
         .iter()
         .enumerate()
         .map(|(index, led)| -> Color {
-            let mapping = map.iter().find(|keymap| -> bool {
+            // Try to find the led in any keymap
+            let mapping = keymaps.iter().find(|keymap| -> bool {
                 keymap
                     .keys
                     .iter()

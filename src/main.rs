@@ -3,6 +3,8 @@ mod utils;
 use crate::dbus::*;
 use crate::utils::*;
 
+use log::warn;
+use log::{error, info};
 use openrgb::data::{Controller, LED};
 use openrgb::OpenRGB;
 use std::error::Error;
@@ -11,6 +13,8 @@ use tokio::{net::TcpStream, time::sleep};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    env_logger::init();
+
     // connect to default server at localhost
     let client_opt;
     loop {
@@ -18,14 +22,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
             Ok(cl) => {
                 client_opt = Some(cl);
                 break;
-            },
+            }
             Err(e) => {
-                println!("{}, retrying in 3 seconds", e);
+                warn!("{}, retrying openrgb connection in 3 seconds", e);
                 tokio::time::sleep(Duration::from_secs(3)).await
             }
         };
     }
     let client = client_opt.unwrap();
+
+    info!("Connected to openrgb!");
 
     let controllers = client.get_controller_count().await?;
     let mut target_controller: Option<Controller> = None;
@@ -34,7 +40,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // query and print each controller data
     for controller_id in 0..controllers {
         let controller = client.get_controller(controller_id).await?;
-        println!("controller {}: {}", controller_id, controller.name);
+        info!("controller {}: {}", controller_id, controller.name);
         if controller.name.eq(KEYBOARD_NAME) {
             target_controller = Some(controller);
             target_controller_id = Some(controller_id);
@@ -46,11 +52,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Err(format!("{} not found!", KEYBOARD_NAME))?
     }
 
+    info!("Started main render loop");
     tokio::spawn(async move {
         match render_frames(target_controller_id.unwrap(), &client).await {
             Ok(_) => {}
             Err(e) => {
-                print!("Ann error occured in the frame rendering loop: {}", e);
+                error!("Ann error occurred in the frame rendering loop: {}", e);
             }
         };
     });
@@ -100,7 +107,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             })
             .collect();
 
-        fade_into_frame(&intermediate, FRAME_DELTA * 2) // stretch each frame 2 times
+        fade_into_frame(&intermediate, FRAME_DURATION_MS * 2) // stretch each frame 2 times
     }
 
     *BASE_FRAME.write().unwrap() = target_substrate;
@@ -114,13 +121,13 @@ fn enq_frame(frame: Frame) {
     match FRAME_Q.push(frame) {
         Ok(_) => {}
         Err(e) => {
-            println!("Error adding frame! ({})", e);
+            error!("Error adding frame! ({})", e);
         }
     }
 }
 
 async fn render_frames(id: u32, client: &OpenRGB<TcpStream>) -> Result<(), Box<dyn Error>> {
-    let frame_delay = Duration::from_millis(FRAME_DELTA as u64);
+    let frame_delay = Duration::from_millis(FRAME_DURATION_MS as u64);
     loop {
         if let Ok(frame) = FRAME_Q.pop() {
             client.update_leds(id, frame).await?;

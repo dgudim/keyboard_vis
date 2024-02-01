@@ -12,7 +12,7 @@
             "flash_on_notify": false,
             "important": true
         },
-        "discord": {
+        "vesktop": {
             "color": "#ff00ff",
             "flash_on_auto_close": "#ffaaff",
             "flash_on_notify": false,

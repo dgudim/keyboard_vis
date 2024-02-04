@@ -1,4 +1,12 @@
 {
+    "keyboard": {
+        "name": "Razer Ornata Chroma",
+        "zone": "Keyboard"
+    },
+    "backlight": {
+        "name": "ASUS TUF GAMING B550M-PLUS",
+        "zone": "Aura Addressable 1"
+    },
     "notification_map": {
         "Thunderbird": {
             "color": "#0000ff",

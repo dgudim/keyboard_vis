@@ -9,7 +9,7 @@
 ## Features
 - Display important notifications on the keyboard
 - Display download/file copy progress on the keyboard
-- Dim the keyboard after locking the screen
+- Dim the keyboard (and backlight) after locking the screen
 - Cool animation on startup
 
 ## Running 

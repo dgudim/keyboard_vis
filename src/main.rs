@@ -1,69 +1,107 @@
+mod consts;
 mod dbus;
 mod utils;
+use crate::consts::*;
 use crate::dbus::*;
 use crate::utils::*;
-
+use atomic::Ordering;
 use log::warn;
 use log::{error, info};
-use openrgb::data::{Controller, LED};
+use openrgb::data::Color;
+use openrgb::data::Controller;
+use openrgb::data::LED;
 use openrgb::OpenRGB;
+use serde_json::Value;
+use signal_hook::consts::SIGTERM;
+use signal_hook::{consts::SIGINT, iterator::Signals};
 use std::error::Error;
+use std::fs;
+use std::thread;
 use std::time::Duration;
+use std::vec;
 use tokio::{net::TcpStream, time::sleep};
+
+use rand::prelude::*;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     // connect to default server at localhost
-    let client_opt;
-    loop {
-        match OpenRGB::connect().await {
-            Ok(cl) => {
-                client_opt = Some(cl);
-                break;
-            }
-            Err(e) => {
-                warn!("{}, retrying openrgb connection in 3 seconds", e);
-                tokio::time::sleep(Duration::from_secs(3)).await
-            }
-        };
-    }
-    let client = client_opt.unwrap();
+    let keyboard_client = get_openrgb_client("Keyboard client").await;
+    let backlight_client = get_openrgb_client("Backlight client").await;
 
-    info!("Connected to openrgb!");
+    let controller_ids = 0..keyboard_client.get_controller_count().await?;
 
-    let controllers = client.get_controller_count().await?;
-    let mut target_controller: Option<Controller> = None;
-    let mut target_controller_id: Option<u32> = None;
+    let mut keyboard_controller: Option<ControllerInfo> = None;
+    let mut backlight_controller: Option<ControllerInfo> = None;
+
+    // Read json config
+    let config_j: Value = serde_json::from_str(
+        fs::read_to_string("notification_config.json")
+            .expect("Error reading notification config")
+            .as_str(),
+    )?;
+
+    let keyboard_name = config_j["keyboard"]["name"].as_str().unwrap();
+    let keyboard_zone = config_j["keyboard"]["zone"].as_str().unwrap();
+    let backlight_name = config_j["backlight"]["name"].as_str().unwrap();
+    let backlight_zone = config_j["backlight"]["zone"].as_str().unwrap();
 
     // query and print each controller data
-    for controller_id in 0..controllers {
-        let controller = client.get_controller(controller_id).await?;
-        info!("controller {}: {}", controller_id, controller.name);
-        if controller.name.eq(KEYBOARD_NAME) {
-            target_controller = Some(controller);
-            target_controller_id = Some(controller_id);
-            break;
+    for controller_id in controller_ids {
+        let controller = keyboard_client.get_controller(controller_id).await?;
+        info!(
+            "controller {}: {} | Zones: {:?}",
+            controller_id,
+            controller.name,
+            controller
+                .zones
+                .iter()
+                .map(|zone| { zone.name.as_str() })
+                .collect::<Vec<_>>()
+        );
+        keyboard_client.set_custom_mode(controller_id).await?;
+        if controller.name.eq(keyboard_name) {
+            turn_off_unused_zones(&keyboard_client, keyboard_zone, &controller, controller_id)
+                .await?;
+            keyboard_controller = Some(ControllerInfo::new(
+                controller,
+                controller_id,
+                keyboard_zone,
+            )?);
+        } else if controller.name.eq(backlight_name) {
+            turn_off_unused_zones(&keyboard_client, backlight_zone, &controller, controller_id)
+                .await?;
+            backlight_controller = Some(ControllerInfo::new(
+                controller,
+                controller_id,
+                backlight_zone,
+            )?);
+        } else {
+            turn_off_unused_zones(&keyboard_client, backlight_zone, &controller, controller_id)
+                .await?;
         }
     }
 
-    if target_controller.is_none() {
-        Err(format!("{} not found!", KEYBOARD_NAME))?
+    if keyboard_controller.is_none() {
+        Err(format!("{} not found!", keyboard_name))?
     }
 
-    info!("Started main render loop");
-    tokio::spawn(async move {
-        match render_frames(target_controller_id.unwrap(), &client).await {
-            Ok(_) => {}
-            Err(e) => {
-                error!("Ann error occurred in the frame rendering loop: {}", e);
-            }
-        };
-    });
+    if backlight_controller.is_none() {
+        Err(format!("{} not found!", backlight_name))?
+    }
 
-    let target_substrate = get_frame_by_key_names(
-        &target_controller.unwrap().leds,
+    let keyboard_controller = keyboard_controller.unwrap();
+    let backlight_controller = backlight_controller.unwrap();
+
+    // Starting frame: full black
+    *KEYBOARD_BASE_FRAME.write().unwrap() = vec![BLACK; keyboard_controller.total_leds];
+    *KEYBOARD_LAST_FRAME.write().unwrap() = vec![BLACK; keyboard_controller.total_leds];
+
+    // Target frame: colored according to my preferences
+    let keyboard_target_substrate = get_frame_by_key_names(
+        keyboard_controller.leds(),
         Vec::from([
             KeyMap {
                 keys: Vec::from(["Key: Number Pad", "Key: Num Lock"]),
@@ -84,22 +122,79 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
     );
 
-    for target_dist in 0..CENTER_X * 3 {
+    let mut signals = Signals::new([SIGINT, SIGTERM])?;
+    thread::spawn(move || {
+        signals.forever().next(); // Blocks until the signal is received
+        info!("Exiting main render loop...");
+        let base = vec![BLACK; keyboard_controller.total_leds];
+        let mut rng = rand::thread_rng();
+        for i in 1..7 {
+            let frame = base
+                .iter()
+                .map(|_| {
+                    let r: f64 = rng.gen();
+                    Color {
+                        b: 0,
+                        g: 0,
+                        r: (r / i as f64 * 255.0) as u8,
+                    }
+                })
+                .collect();
+            fade_into_frame(&frame, FRAME_DURATION_MS * 3);
+        }
+        fade_into_frame(&base, FRAME_DURATION_MS * 7);
+        ABOUT_TO_SHUTDOWN.store(1, Ordering::Relaxed);
+    });
+
+    tokio::spawn(async move {
+        info!("Started main render loop");
+        match render_keyboard_frames(
+            keyboard_controller.id,
+            keyboard_controller.zone_id,
+            &keyboard_client,
+        )
+        .await
+        {
+            Ok(_) => {
+                info!("Main loop exited, exiting the program");
+                ABOUT_TO_SHUTDOWN.store(2, Ordering::Relaxed);
+            }
+            Err(e) => {
+                error!("An error occurred in the frame rendering loop: {}", e);
+            }
+        };
+    });
+
+    tokio::spawn(async move {
+        info!("Started aux render loop");
+        match render_backlight_frames(backlight_controller, &backlight_client).await {
+            Ok(_) => {}
+            Err(e) => {
+                error!("An error occurred in the aux frame rendering loop: {}", e);
+            }
+        };
+    });
+
+    let keyboard_gray_substrate = vec![GRAY; keyboard_controller.total_leds];
+
+    for target_dist in 0..keyboard_controller.center_x * 3 {
         let target_dist_f = target_dist as f64;
 
-        let intermediate: Frame = GRAY_SUBSTRATE
+        let intermediate: Frame = keyboard_gray_substrate
             .iter()
             .enumerate()
             .map(|(index, gray)| {
-                let pos = num2xy(index);
-                let distance_from_center =
-                    (((pos.x as i64 - CENTER_X).pow(2) + (pos.y as i64 - CENTER_Y).pow(2)) as f64)
-                        .sqrt();
+                let pos = keyboard_controller.num2xy(index);
+                let distance_from_center = (((pos.x as i64 - keyboard_controller.center_x as i64)
+                    .pow(2)
+                    + (pos.y as i64 - keyboard_controller.center_y as i64).pow(2))
+                    as f64)
+                    .sqrt();
 
                 // center color to gray
                 if distance_from_center < target_dist_f {
                     let distance_factor = (distance_from_center - target_dist_f + 7.0) / 4.0; // 7 led offset from the center, 4 led width (offset from the edge)
-                    return lerp_color(&target_substrate[index], gray, distance_factor);
+                    return lerp_color(&keyboard_target_substrate[index], gray, distance_factor);
                 }
 
                 let distance_factor = (distance_from_center - target_dist_f) / 2.0;
@@ -110,15 +205,43 @@ async fn main() -> Result<(), Box<dyn Error>> {
         fade_into_frame(&intermediate, FRAME_DURATION_MS * 2) // stretch each frame 2 times
     }
 
-    *BASE_FRAME.write().unwrap() = target_substrate;
-    process_dbus()?;
+    *KEYBOARD_BASE_FRAME.write().unwrap() = keyboard_target_substrate;
+
+    process_dbus(config_j, keyboard_controller)?;
 
     Ok(())
 }
 
-fn enq_frame(frame: Frame) {
-    *LAST_FRAME.write().unwrap() = frame.clone();
-    match FRAME_Q.push(frame) {
+async fn turn_off_unused_zones(
+    client: &OpenRGB<TcpStream>,
+    whitelisted_zone: &str,
+    controller: &Controller,
+    controller_id: u32,
+) -> Result<(), Box<dyn Error>> {
+    for (zone_id, z) in controller
+        .zones
+        .iter()
+        .enumerate()
+        .filter(|(_, z)| z.name.ne(whitelisted_zone))
+    {
+        info!(
+            "Turning off zone {} of controller: {}",
+            z.name, controller.name
+        );
+        client
+            .update_zone_leds(
+                controller_id,
+                zone_id as u32,
+                vec![BLACK; z.leds_count as usize],
+            )
+            .await?;
+    }
+    Ok(())
+}
+
+fn enq_keyboard_frame(frame: Frame) {
+    *KEYBOARD_LAST_FRAME.write().unwrap() = frame.clone();
+    match KEYBOARD_FRAME_Q.push(frame) {
         Ok(_) => {}
         Err(e) => {
             error!("Error adding frame! ({})", e);
@@ -126,13 +249,85 @@ fn enq_frame(frame: Frame) {
     }
 }
 
-async fn render_frames(id: u32, client: &OpenRGB<TcpStream>) -> Result<(), Box<dyn Error>> {
+async fn render_keyboard_frames(
+    id: u32,
+    zone_id: u32,
+    client: &OpenRGB<TcpStream>,
+) -> Result<(), Box<dyn Error>> {
     let frame_delay = Duration::from_millis(FRAME_DURATION_MS as u64);
     loop {
-        if let Ok(frame) = FRAME_Q.pop() {
-            client.update_leds(id, frame).await?;
-        };
+        match KEYBOARD_FRAME_Q.pop() {
+            Ok(frame) => client.update_zone_leds(id, zone_id, frame).await?,
+            Err(_) => {
+                if ABOUT_TO_SHUTDOWN.load(Ordering::Relaxed) > 0 {
+                    // Exit the loop, we need to shutdown
+                    return Ok(());
+                }
+            }
+        }
 
         sleep(frame_delay).await;
+    }
+}
+
+async fn render_backlight_frames(
+    backlight_controller: ControllerInfo,
+    client: &OpenRGB<TcpStream>,
+) -> Result<(), Box<dyn Error>> {
+    let frame_delay = Duration::from_millis(FRAME_DURATION_MS as u64);
+    let base = vec![BLACK; backlight_controller.total_leds];
+
+    let update_leds = |frame: Frame| {
+        return client
+        .update_zone_leds(backlight_controller.id, backlight_controller.zone_id, frame);
+    };
+
+    let generate_frame = |offset: f64, offset2: f64, brightness: f64| {
+        return base
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            lerp_color(&BLACK, &lerp_color(
+                &BACKLIGHT_WAVE1_COLOR,
+                &BACKLIGHT_WAVE2_COLOR,
+                ((index as f64 / 4.0 + offset).sin() * offset2.sin() + 1.0) / 2.0,
+            ), brightness)
+        })
+        .collect::<Vec<_>>();
+    };
+
+    let mut offset = 0.0;
+    let mut offset2 = 0.8;
+    let mut brightness = 0.0;
+    
+    loop {
+        offset += 0.06;
+        offset2 += 0.035;
+        if SCREEN_LOCKED.load(Ordering::Relaxed) {
+            brightness -= 0.07_f64
+        } else if ABOUT_TO_SHUTDOWN.load(Ordering::Relaxed) > 0 {
+            brightness -= 0.1_f64
+        } else {
+            brightness += 0.07_f64
+        }
+        brightness = brightness.clamp(0.0, 1.0);
+        update_leds(generate_frame(offset, offset2, brightness)).await?;
+        sleep(frame_delay).await;
+    }
+}
+
+async fn get_openrgb_client(name: &str) -> OpenRGB<TcpStream> {
+    loop {
+        match OpenRGB::connect().await {
+            Ok(cl) => {
+                cl.set_name(name).await.unwrap();
+                info!("Connected to openrgb with name: {name}!");
+                return cl;
+            }
+            Err(e) => {
+                warn!("{}, retrying in 3 seconds", e);
+                tokio::time::sleep(Duration::from_secs(3)).await
+            }
+        };
     }
 }

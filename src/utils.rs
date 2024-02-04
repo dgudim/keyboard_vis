@@ -1,25 +1,95 @@
 use std::{
+    error::Error,
     ops::AddAssign,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, RwLock,
-    },
+    sync::{atomic::Ordering, Arc, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use atomic::Atomic;
-use color_hex::color_from_hex;
-use concurrent_queue::ConcurrentQueue;
 use css_color_parser::Color as CssColor;
 use dashmap::DashMap;
 use log::info;
-use once_cell::sync::Lazy;
-use openrgb::data::{Color, LED};
+use openrgb::data::{Color, Controller, ZoneType, LED};
 
-use crate::enq_frame;
+use crate::{enq_keyboard_frame, consts::*};
 
-pub type Frame = Vec<Color>;
-pub type LazyFrame = Lazy<Frame>;
+pub struct ControllerInfo {
+    pub raw: Controller,
+    pub id: u32,
+    pub zone_id: u32,
+
+    pub width: usize,
+    pub height: usize,
+
+    pub center_x: usize,
+    pub center_y: usize,
+
+    pub total_leds: usize,
+}
+
+impl ControllerInfo {
+    pub fn new(
+        controller: Controller,
+        id: u32,
+        zone_name: &str,
+    ) -> Result<ControllerInfo, Box<dyn Error>> {
+        let (target_zone_id, target_zone) = controller
+            .zones
+            .iter()
+            .enumerate()
+            .find(|(_, zone)| zone.name.eq(zone_name))
+            .unwrap();
+
+        let mut height = 1;
+        let total_leds = target_zone.leds_count as usize;
+        let mut width = total_leds;
+
+        if target_zone.r#type.eq(&ZoneType::Matrix) {
+            let zone_matrix = target_zone.matrix.as_ref().unwrap();
+            width = zone_matrix.num_columns();
+            height = zone_matrix.num_rows();
+            if zone_matrix.num_elements() != total_leds {
+                Err("zone_matrix.num_elements() != total_leds")?
+            }
+        }
+
+        info!(
+            "Constructed a new controller: {} 
+                | zone name: {zone_name} 
+                | total_leds: {total_leds} 
+                | width: {width}, height: {height}
+                | center x: {}, center y: {}",
+            controller.name,
+            width / 2,
+            height / 2
+        );
+
+        Ok(ControllerInfo {
+            zone_id: target_zone_id as u32,
+            raw: controller,
+            id,
+            width,
+            height,
+            center_x: width / 2,
+            center_y: height / 2,
+            total_leds,
+        })
+    }
+
+    pub fn leds(&self) -> impl Iterator<Item = (usize, &LED)> {
+        return self.raw.leds.iter().enumerate();
+    }
+
+    // Index of the led into xy coordinates
+    pub fn num2xy(&self, index: usize) -> Point {
+        let nc = index.clamp(0, self.total_leds);
+        let y = nc / self.width;
+        let x = nc - y * self.width;
+        Point {
+            x,
+            y: self.height - y - 1,
+        }
+    }
+}
 
 pub struct NotificationSettings {
     pub color: Color,
@@ -63,85 +133,6 @@ pub struct Point {
     pub y: usize,
 }
 
-pub const ROW_LENGTH: usize = 22;
-pub const ROW_COUNT: usize = 6;
-pub const TOTAL_LEDS: usize = ROW_LENGTH * ROW_COUNT;
-
-// Workarounds quirks in some keyboards (skip esc key, etc) this offsets the starting position of the top bar
-pub const COL_OFFSET_START: usize = 1;
-// The same, but fo the end of the top bar
-pub const COL_OFFSET_END: usize = 4;
-pub const TOP_ROW_LENGTH: usize = ROW_LENGTH - COL_OFFSET_END - COL_OFFSET_START;
-
-pub const CENTER_X: i64 = (ROW_LENGTH / 2) as i64;
-pub const CENTER_Y: i64 = (ROW_COUNT / 2) as i64;
-
-// How many ms per frame
-pub const FRAME_DURATION_MS: u32 = 75;
-
-// Define some constants (colors)
-pub const TRANSPARENT_BLACK: CssColor = CssColor {
-    r: 0,
-    g: 0,
-    b: 0,
-    a: 1.0,
-};
-
-pub const BLACK: Color = Color { r: 0, g: 0, b: 0 };
-pub const WHITE: Color = Color {
-    r: 255,
-    g: 255,
-    b: 255,
-};
-pub const GRAY: Color = Color {
-    r: 80,
-    g: 65,
-    b: 80,
-};
-pub const DIM_GRAY: Color = Color {
-    r: 40,
-    g: 35,
-    b: 40,
-};
-
-pub const MAIN_COLOR: Color = u8_to_col(color_from_hex!("#9e2000"));
-pub const TOP_ROW_COLOR: Color = u8_to_col(color_from_hex!("#d19900"));
-pub const FUNCTION_COLOR: Color = u8_to_col(color_from_hex!("#7800ab"));
-pub const FUNCTION_COLOR2: Color = u8_to_col(color_from_hex!("#8a0084"));
-pub const NUM_PAD_COLOR: Color = u8_to_col(color_from_hex!("#005da1"));
-
-pub const RED: Color = u8_to_col(color_from_hex!("#ff0000"));
-pub const GREEN: Color = u8_to_col(color_from_hex!("#00ff00"));
-pub const BLUE: Color = u8_to_col(color_from_hex!("#0000ff"));
-pub const PURPLE: Color = u8_to_col(color_from_hex!("#ff00ff"));
-
-pub static GRAY_SUBSTRATE: LazyFrame = Lazy::new(|| vec![GRAY; TOTAL_LEDS]);
-pub static DIM_GRAY_SUBSTRATE: LazyFrame = Lazy::new(|| vec![DIM_GRAY; TOTAL_LEDS]);
-pub static BLACK_SUBSTRATE: LazyFrame = Lazy::new(|| vec![BLACK; TOTAL_LEDS]);
-
-pub static LAST_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(BLACK_SUBSTRATE.clone()));
-pub static BASE_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(BLACK_SUBSTRATE.clone()));
-pub static FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(ConcurrentQueue::unbounded);
-
-// Arc for screen lock state and flash color
-pub static SCREEN_LOCKED: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
-pub static FLASH_COLOR: Lazy<Arc<Atomic<Color>>> = Lazy::new(|| Arc::new(Atomic::new(BLACK)));
-// TODO: This should be in a config somewhere
-pub const KEYBOARD_NAME: &str = "Razer Ornata Chroma";
-// Minimum value for progress delta to cause a recomposite
-pub const PROGRESS_STEP: f64 = 0.0;
-
-// Index of the led into xy coordinates
-pub fn num2xy(n: usize) -> Point {
-    let nc = n.clamp(0, TOTAL_LEDS);
-    let y = nc / ROW_LENGTH;
-    let x = nc - y * ROW_LENGTH;
-    Point {
-        x,
-        y: ROW_COUNT - y - 1,
-    }
-}
-
 pub const fn u8_to_col(arr: [u8; 3]) -> Color {
     Color {
         r: arr[0],
@@ -172,11 +163,11 @@ pub fn fade_into_frame(frame_to: &Frame, fade_time_ms: u32) {
     // Calculate how many steps we need to take
     let iterations = fade_time_ms / FRAME_DURATION_MS;
     // don't cause a deadlock (by later inserting into the same map), copy the starting frame
-    let frame_from = LAST_FRAME.read().unwrap().clone();
+    let frame_from = KEYBOARD_LAST_FRAME.read().unwrap().clone();
     // Iterate (+1 to immediately start changing, 0 = starting frame)
     for i in 1..(iterations + 1) {
         // Add frame to the queue
-        enq_frame(
+        enq_keyboard_frame(
             frame_from
                 .iter()
                 .zip(frame_to.iter())
@@ -197,19 +188,21 @@ pub fn get_timestamp() -> u128 {
 }
 
 pub fn flash_color(
+    keyboard_info: &Arc<ControllerInfo>,
     color: Color,
     hold: u64,
     progress_map: &Arc<ProgressMap>,
     notifications: &Arc<RwLock<Vec<Notification>>>,
 ) -> bool {
     // Store the target color right away
-    FLASH_COLOR.store(color, Ordering::Relaxed);
+    KEYBOARD_FLASH_COLOR.store(color, Ordering::Relaxed);
     // Animate! (300ms)
-    composite(progress_map, notifications, Some(300));
+    composite(keyboard_info, progress_map, notifications, Some(300));
 
     tokio::spawn({
+        let keyboard_info_clone = keyboard_info.clone();
         // Copy the Arc to move it into the deferred function call
-        let flash_clone = FLASH_COLOR.clone();
+        let flash_clone = KEYBOARD_FLASH_COLOR.clone();
         // Also copy Arcs for the progress map and notifications
         let progress_map_clone = progress_map.clone();
         let notifications_clone = notifications.clone();
@@ -220,13 +213,19 @@ pub fn flash_color(
             // Store black frame (flash off)
             flash_clone.store(BLACK, Ordering::Relaxed);
             // Animate!
-            composite(&progress_map_clone, &notifications_clone, Some(300));
+            composite(
+                &keyboard_info_clone,
+                &progress_map_clone,
+                &notifications_clone,
+                Some(300),
+            );
         }
     });
     true
 }
 
 pub fn composite(
+    keyboard_info: &ControllerInfo,
     progress_map: &ProgressMap,
     notifications_lock: &RwLock<Vec<Notification>>,
     fade_time_ms: Option<u32>,
@@ -243,14 +242,17 @@ pub fn composite(
             g: 0.0,
             b: 0.0
         };
-        ROW_LENGTH
+        keyboard_info.width
     ];
     // Start from the base frame
-    let mut new_frame = get_base();
+    let mut new_frame = get_keyboard_base(keyboard_info);
     // How many loading bars d we have
     let mut num_bars: usize = 0;
     // How many colored(filled) leds do we have
     let mut colored_leds: u32 = 0;
+
+    let corrected_top_row_len =
+        keyboard_info.width - KEYBOARD_COL_OFFSET_START - KEYBOARD_COL_OFFSET_END;
 
     for progress_tuple in progress_map {
         let color = progress_tuple.0;
@@ -264,7 +266,7 @@ pub fn composite(
         num_bars += 1;
 
         // Scale to fill the entire top row
-        let scaled_progress = progress * TOP_ROW_LENGTH as f64;
+        let scaled_progress = progress * corrected_top_row_len as f64;
         // Remove the floating part
         let filled_leds = scaled_progress as usize;
         // Update the number of colored leds (take maximum)
@@ -283,25 +285,25 @@ pub fn composite(
     }
 
     // Get the flash color
-    let flash = FLASH_COLOR.load(Ordering::Relaxed);
+    let flash = KEYBOARD_FLASH_COLOR.load(Ordering::Relaxed);
 
     if flash != BLACK {
         // We need to flash
-        for i in 0..TOP_ROW_LENGTH {
+        for i in 0..corrected_top_row_len {
             // Fill the top bar
-            new_frame[i + COL_OFFSET_START] = flash;
+            new_frame[i + KEYBOARD_COL_OFFSET_START] = flash;
         }
     } else {
         // Normalise the color
         for i in 0..colored_leds as usize {
-            new_frame[i + COL_OFFSET_START] = Color {
+            new_frame[i + KEYBOARD_COL_OFFSET_START] = Color {
                 r: (top_bar[i].r / num_bars as f64) as u8,
                 g: (top_bar[i].g / num_bars as f64) as u8,
                 b: (top_bar[i].b / num_bars as f64) as u8,
             };
         }
 
-        let mut index = COL_OFFSET_START + 2;
+        let mut index = KEYBOARD_COL_OFFSET_START + 2;
         for notification in notifications.iter() {
             new_frame[index] = notification.settings.color;
             index += 1;
@@ -313,11 +315,11 @@ pub fn composite(
     true
 }
 
-pub fn get_base() -> Frame {
+pub fn get_keyboard_base(keyboard_info: &ControllerInfo) -> Frame {
     if SCREEN_LOCKED.load(Ordering::Relaxed) {
-        DIM_GRAY_SUBSTRATE.clone()
+        vec![DIM_GRAY; keyboard_info.total_leds]
     } else {
-        BASE_FRAME.read().unwrap().clone()
+        KEYBOARD_BASE_FRAME.read().unwrap().clone()
     }
 }
 
@@ -327,14 +329,12 @@ pub struct KeyMap<'a> {
 }
 
 // Map keyboard key names to colors
-pub fn get_frame_by_key_names(
-    leds: &[LED],
+pub fn get_frame_by_key_names<'a>(
+    leds: impl Iterator<Item = (usize, &'a LED)>,
     keymaps: Vec<KeyMap>,
     fallback_function: &dyn Fn(&LED, usize) -> Color,
 ) -> Frame {
     return leds
-        .iter()
-        .enumerate()
         .map(|(index, led)| -> Color {
             // Try to find the led in any keymap
             let mapping = keymaps.iter().find(|keymap| -> bool {

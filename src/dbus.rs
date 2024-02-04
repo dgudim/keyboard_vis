@@ -1,16 +1,15 @@
 use std::{
     collections::HashMap,
     error::Error,
-    fs,
     sync::{atomic::Ordering, Arc, RwLock},
     time::Duration,
     vec,
 };
 
-use crate::utils::{
+use crate::{utils::{
     composite, flash_color, get_timestamp, parse_hex, Notification, NotificationSettings,
-    ProgressMap, BLACK, BLUE, GREEN, PURPLE, RED, SCREEN_LOCKED, WHITE, PROGRESS_STEP,
-};
+    ProgressMap,
+}, consts::*, ControllerInfo};
 use dbus::{
     arg::{prop_cast, PropMap},
     blocking::Connection,
@@ -28,21 +27,17 @@ fn get_full_match_rule<'a>(interface: &'a str, path: &'a str, member: &'a str) -
     );
 }
 
-pub fn process_dbus() -> Result<(), Box<dyn Error>> {
+pub fn process_dbus(config_j: Value, keyboard_info: ControllerInfo) -> Result<(), Box<dyn Error>> {
     // Connect to the D-Bus session bus (this is blocking, unfortunately).
     let conn = Connection::new_session()?;
+
+    let keyboard_info_arc = Arc::new(keyboard_info);
 
     let pending_notification_q = Arc::new(RwLock::new(Vec::<Notification>::new()));
     let notification_q = Arc::new(RwLock::new(Vec::<Notification>::new()));
 
     let mut notification_map = HashMap::new();
     let progress_map = Arc::new(ProgressMap::new());
-
-    let config_j: Value = serde_json::from_str(
-        fs::read_to_string("notification_config.json")
-            .expect("Error reading notification config")
-            .as_str(),
-    )?;
 
     for (key, value) in config_j["notification_map"].as_object().unwrap().into_iter() {
         info!("Loaded {} from notification map", key);
@@ -121,6 +116,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
 
             let notification_q = notification_q.clone();
             let progress_map = progress_map.clone();
+            let keyboard_info_arc = keyboard_info_arc.clone();
 
             move |message: Message, _| {
                 let (source, props): (&str, PropMap) = message.read2().unwrap();
@@ -156,10 +152,10 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                     } else {
                         PURPLE // invisible notification without visible progress (spectacle call, download finished)
                     };
-                    flash_color(color, 350, &progress_map, &notification_q);
+                    flash_color(&keyboard_info_arc, color, 350, &progress_map, &notification_q);
                 } else if progress_delta > PROGRESS_STEP {
                     // recomposite if progress changed to not cause stalled animations
-                    composite(&progress_map, &notification_q, None);
+                    composite(&keyboard_info_arc, &progress_map, &notification_q, None);
                 }
                 true
             }
@@ -174,14 +170,15 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             let screen_locked = SCREEN_LOCKED.clone();
             let notifications = notification_q.clone();
             let progress_map = progress_map.clone();
-                
+            let keyboard_info_arc = keyboard_info_arc.clone();
+
             move |message: Message, _| {
                 let locked: bool = message.read1().unwrap();
                 info!("Screen locked/unlocked: {locked}");
                 // Store screen locked state
                 screen_locked.store(locked, Ordering::Relaxed);
                 // Animate!
-                composite(&progress_map, &notifications, Some(1500));
+                composite(&keyboard_info_arc, &progress_map, &notifications, Some(1500));
                 true
             }
         })
@@ -228,6 +225,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
             let pending_notification_q = pending_notification_q.clone();
             let notification_q = notification_q.clone();
             let progress_map = progress_map.clone();
+            let keyboard_info_arc = keyboard_info_arc.clone();
 
             move |message: Message, _| {
                 let (id, reason): (u32, u32) = message.read2().unwrap();
@@ -251,7 +249,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                     let settings = &notif.settings;
 
                     if settings.flash_on_auto_close != BLACK {
-                        flash_color(
+                        flash_color(&keyboard_info_arc,
                             settings.flash_on_auto_close,
                             500,
                             &progress_map,
@@ -262,7 +260,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                     if settings.important {
                         notification_q.write().unwrap().push(notif);
                         info!("Moved pending notification {id} to display queue");
-                        composite(&progress_map, &notification_q, Some(200));
+                        composite(&keyboard_info_arc, &progress_map, &notification_q, Some(200));
                     }
 
                     return true;
@@ -273,7 +271,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                 if let Some(ind_full) = ind_full {
                     info!(" -=-=- Hidden notification closed id: {id} | reason: {reason}");
                     notification_q.write().unwrap().remove(ind_full);
-                    composite(&progress_map, &notification_q, Some(200));
+                    composite(&keyboard_info_arc, &progress_map, &notification_q, Some(200));
                 }
 
                 // warn!(" !!-=-=-!! Unknown notification closed, id: {id} | reason: {reason}, could not find matching id");
@@ -297,7 +295,7 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
                             info!("Notification delivered, set its id to {id} | reply to {destination}");
                             let settings = &notif.settings;
                             if settings.flash_on_notify {
-                                flash_color(settings.color, 900, &progress_map, &notification_q);
+                                flash_color(&keyboard_info_arc, settings.color, 900, &progress_map, &notification_q);
                             }
                         },
                         None => {
@@ -319,5 +317,9 @@ pub fn process_dbus() -> Result<(), Box<dyn Error>> {
 
     loop {
         conn.process(Duration::from_millis(1000)).unwrap();
+        if ABOUT_TO_SHUTDOWN.load(Ordering::Relaxed) > 1 {
+            info!("Exit");
+            return Ok(());
+        }
     }
 }

@@ -43,10 +43,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .as_str(),
     )?;
 
-    let keyboard_name = config_j["keyboard"]["name"].as_str().unwrap();
-    let keyboard_zone = config_j["keyboard"]["zone"].as_str().unwrap();
-    let backlight_name = config_j["backlight"]["name"].as_str().unwrap();
-    let backlight_zone = config_j["backlight"]["zone"].as_str().unwrap();
+    let keyboard_name = config_j["keyboard"]["name"].as_str().expect("Keyboard name missing");
+    let keyboard_zone = config_j["keyboard"]["zone"].as_str().expect("Keyboard zone missing");
+    let backlight_name = config_j["backlight"]["name"].as_str().expect("Backlight name missing");
+    let backlight_zone = config_j["backlight"]["zone"].as_str().expect("Backlight zone missing");
 
     // query and print each controller data
     for controller_id in controller_ids {

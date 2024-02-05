@@ -84,16 +84,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    if keyboard_controller.is_none() {
-        Err(format!("{} not found!", keyboard_name))?
-    }
-
-    if backlight_controller.is_none() {
-        Err(format!("{} not found!", backlight_name))?
-    }
-
-    let keyboard_controller = keyboard_controller.unwrap();
-    let backlight_controller = backlight_controller.unwrap();
+    let keyboard_controller = keyboard_controller.expect("{keyboard_name} not found!");
+    let backlight_controller = backlight_controller.expect("{backlight_name} not found!");
 
     // Starting frame: full black
     *KEYBOARD_BASE_FRAME.write().unwrap() = vec![BLACK; keyboard_controller.total_leds];
@@ -320,7 +312,7 @@ async fn get_openrgb_client(name: &str) -> OpenRGB<TcpStream> {
     loop {
         match OpenRGB::connect().await {
             Ok(cl) => {
-                cl.set_name(name).await.unwrap();
+                cl.set_name(name).await.expect("Failed setting openrgb client name");
                 info!("Connected to openrgb with name: {name}!");
                 return cl;
             }

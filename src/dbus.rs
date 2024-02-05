@@ -39,22 +39,22 @@ pub fn process_dbus(config_j: Value, keyboard_info: ControllerInfo) -> Result<()
     let mut notification_map = HashMap::new();
     let progress_map = Arc::new(ProgressMap::new());
 
-    for (key, value) in config_j["notification_map"].as_object().unwrap().into_iter() {
+    for (key, value) in config_j["notification_map"].as_object().expect("notification_map map is missing from the json").into_iter() {
         info!("Loaded {} from notification map", key);
         notification_map.insert(
             key.to_owned(),
             Arc::new(NotificationSettings {
-                color: parse_hex(value["color"].as_str().unwrap()),
-                flash_on_auto_close: parse_hex(value["flash_on_auto_close"].as_str().unwrap()),
-                flash_on_notify: value["flash_on_notify"].as_bool().unwrap(),
-                important: value["important"].as_bool().unwrap(),
+                color: parse_hex(value["color"].as_str().expect("color is missing from {key}")),
+                flash_on_auto_close: parse_hex(value["flash_on_auto_close"].as_str().expect("flash_on_auto_close is missing from {key}")),
+                flash_on_notify: value["flash_on_notify"].as_bool().expect("flash_on_notify is missing from {key}"),
+                important: value["important"].as_bool().expect("important is missing from {key}"),
             }),
         );
     }
     
-    for (key, value) in config_j["progress_map"].as_object().unwrap().into_iter() {
+    for (key, value) in config_j["progress_map"].as_object().expect("progress_map is missing from the json").into_iter() {
         info!("Loaded {} from progress map", key);
-        progress_map.insert(key.to_owned(), (parse_hex(value.as_str().unwrap()), 0.0));
+        progress_map.insert(key.to_owned(), (parse_hex(value.as_str().expect("failed getting value for {key} in progress_map")), 0.0));
     }
 
     let notification_delivery_timeout = 2000;

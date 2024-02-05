@@ -37,14 +37,14 @@ impl ControllerInfo {
             .iter()
             .enumerate()
             .find(|(_, zone)| zone.name.eq(zone_name))
-            .unwrap();
+            .expect("Zone {zone_name} not found in {id}");
 
         let mut height = 1;
         let total_leds = target_zone.leds_count as usize;
         let mut width = total_leds;
 
         if target_zone.r#type.eq(&ZoneType::Matrix) {
-            let zone_matrix = target_zone.matrix.as_ref().unwrap();
+            let zone_matrix = target_zone.matrix.as_ref().expect("Matrix missing for {zone_name}");
             width = zone_matrix.num_columns();
             height = zone_matrix.num_rows();
             if zone_matrix.num_elements() != total_leds {

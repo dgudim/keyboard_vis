@@ -66,5 +66,3 @@ pub static KEYBOARD_FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(Concurrent
 pub static SCREEN_LOCKED: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
 pub static ABOUT_TO_SHUTDOWN: Lazy<Arc<AtomicU8>> = Lazy::new(|| Arc::new(AtomicU8::new(0)));
 pub static KEYBOARD_FLASH_COLOR: Lazy<Arc<Atomic<Color>>> = Lazy::new(|| Arc::new(Atomic::new(BLACK)));
-// Minimum value for progress delta to cause a recomposite
-pub const PROGRESS_STEP: f64 = 0.0;

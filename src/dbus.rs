@@ -132,7 +132,7 @@ pub fn process_dbus(config_j: Value, keyboard_info: ControllerInfo) -> Result<()
                         .or_insert((WHITE, 0.0));
                     progress_delta = (tuple.1 - progress).abs();
 
-                    if progress_delta > PROGRESS_STEP {
+                    if progress_delta > 0.0 {
                         tuple.1 = progress;
                     }
 
@@ -153,7 +153,7 @@ pub fn process_dbus(config_j: Value, keyboard_info: ControllerInfo) -> Result<()
                         PURPLE // invisible notification without visible progress (spectacle call, download finished)
                     };
                     flash_color(&keyboard_info_arc, color, 350, &progress_map, &notification_q);
-                } else if progress_delta > PROGRESS_STEP {
+                } else if progress_delta > 0.0 {
                     // recomposite if progress changed to not cause stalled animations
                     composite(&keyboard_info_arc, &progress_map, &notification_q, None);
                 }

@@ -303,7 +303,9 @@ async fn render_backlight_frames(
             brightness += 0.07_f64
         }
         brightness = brightness.clamp(0.0, 1.0);
-        update_leds(generate_frame(offset, offset2, brightness)).await?;
+        if brightness > 0.0 {
+            update_leds(generate_frame(offset, offset2, brightness)).await?;
+        }
         sleep(frame_delay).await;
     }
 }

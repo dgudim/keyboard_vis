@@ -9,6 +9,7 @@ use log::warn;
 use log::{error, info};
 use openrgb::data::Color;
 use openrgb::data::Controller;
+use openrgb::data::Mode;
 use openrgb::data::LED;
 use openrgb::OpenRGB;
 use serde_json::Value;
@@ -43,10 +44,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
             .as_str(),
     )?;
 
-    let keyboard_name = config_j["keyboard"]["name"].as_str().expect("Keyboard name missing");
-    let keyboard_zone = config_j["keyboard"]["zone"].as_str().expect("Keyboard zone missing");
-    let backlight_name = config_j["backlight"]["name"].as_str().expect("Backlight name missing");
-    let backlight_zone = config_j["backlight"]["zone"].as_str().expect("Backlight zone missing");
+    let keyboard_name = config_j["keyboard"]["name"]
+        .as_str()
+        .expect("Keyboard name missing");
+    let keyboard_zone = config_j["keyboard"]["zone"]
+        .as_str()
+        .expect("Keyboard zone missing");
+    let backlight_name = config_j["backlight"]["name"]
+        .as_str()
+        .expect("Backlight name missing");
+    let backlight_zone = config_j["backlight"]["zone"]
+        .as_str()
+        .expect("Backlight zone missing");
 
     // query and print each controller data
     for controller_id in controller_ids {
@@ -79,8 +88,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 backlight_zone,
             )?);
         } else {
-            turn_off_unused_zones(&keyboard_client, backlight_zone, &controller, controller_id)
-                .await?;
+            turn_off_unused_zones(&keyboard_client, "", &controller, controller_id).await?;
         }
     }
 
@@ -210,6 +218,41 @@ async fn turn_off_unused_zones(
     controller: &Controller,
     controller_id: u32,
 ) -> Result<(), Box<dyn Error>> {
+    if controller.zones.len() == 1 && whitelisted_zone.is_empty() {
+        let (index, mode) = &controller
+            .modes
+            .iter()
+            .enumerate()
+            .find(|(_, mode)| mode.name.eq("Off"))
+            .expect("Didn't find direct mode for controller");
+        info!(
+            "Turning off controller: {} (settings mode to {:?})",
+            controller.name, mode
+        );
+        client
+            .update_mode(
+                controller_id,
+                *index as i32,
+                Mode {
+                    value: mode.value,
+                    brightness: mode.brightness,
+                    brightness_max: mode.brightness_max,
+                    brightness_min: mode.brightness_min,
+                    color_mode: mode.color_mode,
+                    colors: mode.colors.clone(),
+                    colors_max: mode.colors_max,
+                    colors_min: mode.colors_min,
+                    direction: mode.direction,
+                    flags: mode.flags,
+                    name: mode.name.clone(),
+                    speed: mode.speed,
+                    speed_max: mode.speed_max,
+                    speed_min: mode.speed_min,
+                },
+            )
+            .await?;
+        return Ok(());
+    }
     for (zone_id, z) in controller
         .zones
         .iter()
@@ -270,28 +313,35 @@ async fn render_backlight_frames(
     let base = vec![BLACK; backlight_controller.total_leds];
 
     let update_leds = |frame: Frame| {
-        return client
-        .update_zone_leds(backlight_controller.id, backlight_controller.zone_id, frame);
+        return client.update_zone_leds(
+            backlight_controller.id,
+            backlight_controller.zone_id,
+            frame,
+        );
     };
 
     let generate_frame = |offset: f64, offset2: f64, brightness: f64| {
         return base
-        .iter()
-        .enumerate()
-        .map(|(index, _)| {
-            lerp_color(&BLACK, &lerp_color(
-                &BACKLIGHT_WAVE1_COLOR,
-                &BACKLIGHT_WAVE2_COLOR,
-                ((index as f64 / 4.0 + offset).sin() * offset2.sin() + 1.0) / 2.0,
-            ), brightness)
-        })
-        .collect::<Vec<_>>();
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                lerp_color(
+                    &BLACK,
+                    &lerp_color(
+                        &BACKLIGHT_WAVE1_COLOR,
+                        &BACKLIGHT_WAVE2_COLOR,
+                        ((index as f64 / 4.0 + offset).sin() * offset2.sin() + 1.0) / 2.0,
+                    ),
+                    brightness,
+                )
+            })
+            .collect::<Vec<_>>();
     };
 
     let mut offset = 0.0;
     let mut offset2 = 0.8;
     let mut brightness = 0.0;
-    
+
     loop {
         offset += 0.06;
         offset2 += 0.035;
@@ -314,7 +364,9 @@ async fn get_openrgb_client(name: &str) -> OpenRGB<TcpStream> {
     loop {
         match OpenRGB::connect().await {
             Ok(cl) => {
-                cl.set_name(name).await.expect("Failed setting openrgb client name");
+                cl.set_name(name)
+                    .await
+                    .expect("Failed setting openrgb client name");
                 info!("Connected to openrgb with name: {name}!");
                 return cl;
             }

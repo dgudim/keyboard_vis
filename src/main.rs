@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .map(|zone| { zone.name.as_str() })
                 .collect::<Vec<_>>()
         );
-        keyboard_client.set_custom_mode(controller_id).await?;
+        switch_mode(&keyboard_client, &controller, controller_id, "direct").await?;
         if controller.name.eq(keyboard_name) {
             turn_off_unused_zones(&keyboard_client, keyboard_zone, &controller, controller_id)
                 .await?;
@@ -212,6 +212,48 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+async fn switch_mode(
+    client: &OpenRGB<TcpStream>,
+    controller: &Controller,
+    controller_id: u32,
+    mode_name: &str,
+) -> Result<(), Box<dyn Error>> {
+    let mode_name_l = mode_name.to_lowercase();
+
+    info!("Switching {} to {mode_name_l} mode", controller.name);
+
+    let (index, mode) = &controller
+        .modes
+        .iter()
+        .enumerate()
+        .find(|(_, mode)| mode.name.to_lowercase().eq(mode_name_l.as_str()))
+        .expect("Didn't find {mode_name} for controller!");
+
+    client
+        .update_mode(
+            controller_id,
+            *index as i32,
+            Mode {
+                value: mode.value,
+                brightness: mode.brightness,
+                brightness_max: mode.brightness_max,
+                brightness_min: mode.brightness_min,
+                color_mode: mode.color_mode,
+                colors: mode.colors.clone(),
+                colors_max: mode.colors_max,
+                colors_min: mode.colors_min,
+                direction: mode.direction,
+                flags: mode.flags,
+                name: mode.name.clone(),
+                speed: mode.speed,
+                speed_max: mode.speed_max,
+                speed_min: mode.speed_min,
+            },
+        )
+        .await?;
+    Ok(())
+}
+
 async fn turn_off_unused_zones(
     client: &OpenRGB<TcpStream>,
     whitelisted_zone: &str,
@@ -219,37 +261,9 @@ async fn turn_off_unused_zones(
     controller_id: u32,
 ) -> Result<(), Box<dyn Error>> {
     if controller.zones.len() == 1 && whitelisted_zone.is_empty() {
-        let (index, mode) = &controller
-            .modes
-            .iter()
-            .enumerate()
-            .find(|(_, mode)| mode.name.eq("Off"))
-            .expect("Didn't find direct mode for controller");
-        info!(
-            "Turning off controller: {} (settings mode to {:?})",
-            controller.name, mode
-        );
+        info!("Turning off controller: {}", controller.name);
         client
-            .update_mode(
-                controller_id,
-                *index as i32,
-                Mode {
-                    value: mode.value,
-                    brightness: mode.brightness,
-                    brightness_max: mode.brightness_max,
-                    brightness_min: mode.brightness_min,
-                    color_mode: mode.color_mode,
-                    colors: mode.colors.clone(),
-                    colors_max: mode.colors_max,
-                    colors_min: mode.colors_min,
-                    direction: mode.direction,
-                    flags: mode.flags,
-                    name: mode.name.clone(),
-                    speed: mode.speed,
-                    speed_max: mode.speed_max,
-                    speed_min: mode.speed_min,
-                },
-            )
+            .update_leds(controller_id, vec![BLACK; controller.leds.len()])
             .await?;
         return Ok(());
     }

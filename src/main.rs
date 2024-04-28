@@ -92,8 +92,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let keyboard_controller = keyboard_controller.expect("{keyboard_name} not found!");
-    let backlight_controller = backlight_controller.expect("{backlight_name} not found!");
+    let keyboard_controller = keyboard_controller.unwrap_or_else(|| panic!("{} not found!", keyboard_name));
+    let backlight_controller = backlight_controller.unwrap_or_else(|| panic!("{} not found!", backlight_name));
 
     // Starting frame: full black
     *KEYBOARD_BASE_FRAME.write().unwrap() = vec![BLACK; keyboard_controller.total_leds];

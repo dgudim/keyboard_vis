@@ -29,6 +29,7 @@
     },
     "progress_map": {
         "application://firefox": "#ff4503",
-        "application://org.kde.dolphin": "#03c2fc"
+        "application://org.kde.dolphin": "#03c2fc",
+        "application://org.strawberrymusicplayer.strawberry.desktop": "#562b22"
     }
 }

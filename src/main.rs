@@ -17,6 +17,7 @@ use signal_hook::consts::SIGTERM;
 use signal_hook::{consts::SIGINT, iterator::Signals};
 use std::error::Error;
 use std::fs;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::vec;
@@ -92,8 +93,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    let keyboard_controller = keyboard_controller.unwrap_or_else(|| panic!("{} not found!", keyboard_name));
-    let backlight_controller = backlight_controller.unwrap_or_else(|| panic!("{} not found!", backlight_name));
+    let keyboard_controller =
+        Arc::new(keyboard_controller.unwrap_or_else(|| panic!("{} not found!", keyboard_name)));
+
+    let backlight_controller =
+        Arc::new(backlight_controller.unwrap_or_else(|| panic!("{} not found!", backlight_name)));
 
     // Starting frame: full black
     *KEYBOARD_BASE_FRAME.write().unwrap() = vec![BLACK; keyboard_controller.total_leds];
@@ -123,51 +127,60 @@ async fn main() -> Result<(), Box<dyn Error>> {
     );
 
     let mut signals = Signals::new([SIGINT, SIGTERM])?;
-    thread::spawn(move || {
-        signals.forever().next(); // Blocks until the signal is received
-        info!("Exiting main render loop...");
-        let base = vec![BLACK; keyboard_controller.total_leds];
-        let mut rng = rand::thread_rng();
-        for i in 1..7 {
-            let frame = base
-                .iter()
-                .map(|_| {
-                    let r: f64 = rng.gen();
-                    Color {
-                        b: 0,
-                        g: 0,
-                        r: (r / i as f64 * 255.0) as u8,
-                    }
-                })
-                .collect();
-            fade_into_frame(&frame, FRAME_DURATION_MS * 3);
+    thread::spawn({
+        let keyboard_controller_arc = keyboard_controller.clone();
+
+        move || {
+            signals.forever().next(); // Blocks until the signal is received
+            info!("Exiting main render loop...");
+            let base = vec![BLACK; keyboard_controller_arc.total_leds];
+            let mut rng = rand::thread_rng();
+            for i in 1..7 {
+                let frame = base
+                    .iter()
+                    .map(|_| {
+                        let r: f64 = rng.gen();
+                        Color {
+                            b: 0,
+                            g: 0,
+                            r: (r / i as f64 * 255.0) as u8,
+                        }
+                    })
+                    .collect();
+                fade_into_frame(&frame, FRAME_DURATION_MS * 3);
+            }
+            fade_into_frame(&base, FRAME_DURATION_MS * 7);
+            ABOUT_TO_SHUTDOWN.store(1, Ordering::Relaxed);
         }
-        fade_into_frame(&base, FRAME_DURATION_MS * 7);
-        ABOUT_TO_SHUTDOWN.store(1, Ordering::Relaxed);
     });
 
-    tokio::spawn(async move {
-        info!("Started main render loop");
-        match render_keyboard_frames(
-            keyboard_controller.id,
-            keyboard_controller.zone_id,
-            &keyboard_client,
-        )
-        .await
-        {
-            Ok(_) => {
-                info!("Main loop exited, exiting the program");
-                ABOUT_TO_SHUTDOWN.store(2, Ordering::Relaxed);
-            }
-            Err(e) => {
-                error!("An error occurred in the frame rendering loop: {}", e);
-            }
-        };
+    tokio::spawn({
+        let keyboard_controller_arc = keyboard_controller.clone();
+
+        async move {
+            info!("Started main render loop");
+            match render_keyboard_frames(
+                keyboard_controller_arc.id,
+                keyboard_controller_arc.zone_id,
+                &keyboard_client,
+            )
+            .await
+            {
+                Ok(_) => {
+                    info!("Main loop exited, exiting the program");
+                    ABOUT_TO_SHUTDOWN.store(2, Ordering::Relaxed);
+                }
+                Err(e) => {
+                    error!("An error occurred in the frame rendering loop: {}", e);
+                }
+            };
+        }
     });
 
     tokio::spawn(async move {
         info!("Started aux render loop");
-        match render_backlight_frames(backlight_controller, &backlight_client).await {
+
+        match render_backlight_frames(&backlight_controller, &backlight_client).await {
             Ok(_) => {}
             Err(e) => {
                 error!("An error occurred in the aux frame rendering loop: {}", e);
@@ -207,9 +220,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     *KEYBOARD_BASE_FRAME.write().unwrap() = keyboard_target_substrate;
 
-    process_dbus(config_j, keyboard_controller)?;
-
-    Ok(())
+    loop {
+        match process_dbus(&config_j, keyboard_controller.clone()) {
+            Ok(_) => return Ok(()),
+            Err(_) => tokio::time::sleep(Duration::from_secs(1)).await,
+        };
+    }
 }
 
 async fn switch_mode(
@@ -320,7 +336,7 @@ async fn render_keyboard_frames(
 }
 
 async fn render_backlight_frames(
-    backlight_controller: ControllerInfo,
+    backlight_controller: &ControllerInfo,
     client: &OpenRGB<TcpStream>,
 ) -> Result<(), Box<dyn Error>> {
     let frame_delay = Duration::from_millis(FRAME_DURATION_MS as u64);

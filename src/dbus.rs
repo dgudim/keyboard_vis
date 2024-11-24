@@ -27,11 +27,9 @@ fn get_full_match_rule<'a>(interface: &'a str, path: &'a str, member: &'a str) -
     );
 }
 
-pub fn process_dbus(config_j: Value, keyboard_info: ControllerInfo) -> Result<(), Box<dyn Error>> {
+pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ControllerInfo>) -> Result<(), Box<dyn Error>> {
     // Connect to the D-Bus session bus (this is blocking, unfortunately).
     let conn = Connection::new_session()?;
-
-    let keyboard_info_arc = Arc::new(keyboard_info);
 
     let pending_notification_q = Arc::new(RwLock::new(Vec::<Notification>::new()));
     let notification_q = Arc::new(RwLock::new(Vec::<Notification>::new()));
@@ -95,7 +93,7 @@ pub fn process_dbus(config_j: Value, keyboard_info: ControllerInfo) -> Result<()
     );
 
     // become monitor, match all the necessary methods/signals
-    dbus_proxy.method_call(
+    () = dbus_proxy.method_call(
         "org.freedesktop.DBus.Monitoring",
         "BecomeMonitor",
         (
@@ -116,7 +114,7 @@ pub fn process_dbus(config_j: Value, keyboard_info: ControllerInfo) -> Result<()
 
             let notification_q = notification_q.clone();
             let progress_map = progress_map.clone();
-            let keyboard_info_arc = keyboard_info_arc.clone();
+            let keyboard_info_arc = keyboard_info.clone();
 
             move |message: Message, _| {
                 let (source, props): (&str, PropMap) = message.read2().unwrap();
@@ -170,7 +168,7 @@ pub fn process_dbus(config_j: Value, keyboard_info: ControllerInfo) -> Result<()
             let screen_locked = SCREEN_LOCKED.clone();
             let notifications = notification_q.clone();
             let progress_map = progress_map.clone();
-            let keyboard_info_arc = keyboard_info_arc.clone();
+            let keyboard_info_arc = keyboard_info.clone();
 
             move |message: Message, _| {
                 let locked: bool = message.read1().unwrap();
@@ -225,7 +223,7 @@ pub fn process_dbus(config_j: Value, keyboard_info: ControllerInfo) -> Result<()
             let pending_notification_q = pending_notification_q.clone();
             let notification_q = notification_q.clone();
             let progress_map = progress_map.clone();
-            let keyboard_info_arc = keyboard_info_arc.clone();
+            let keyboard_info_arc = keyboard_info.clone();
 
             move |message: Message, _| {
                 let (id, reason): (u32, u32) = message.read2().unwrap();
@@ -295,7 +293,7 @@ pub fn process_dbus(config_j: Value, keyboard_info: ControllerInfo) -> Result<()
                             info!("Notification delivered, set its id to {id} | reply to {destination}");
                             let settings = &notif.settings;
                             if settings.flash_on_notify {
-                                flash_color(&keyboard_info_arc, settings.color, 900, &progress_map, &notification_q);
+                                flash_color(&keyboard_info, settings.color, 900, &progress_map, &notification_q);
                             }
                         },
                         None => {

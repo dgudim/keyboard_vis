@@ -10,7 +10,7 @@ use dashmap::DashMap;
 use log::info;
 use openrgb::data::{Color, Controller, ZoneType, LED};
 
-use crate::{enq_keyboard_frame, consts::*};
+use crate::{consts::*, enq_keyboard_frame};
 
 pub struct ControllerInfo {
     pub raw: Controller,
@@ -44,7 +44,10 @@ impl ControllerInfo {
         let mut width = total_leds;
 
         if target_zone.r#type.eq(&ZoneType::Matrix) {
-            let zone_matrix = target_zone.matrix.as_ref().expect("Matrix missing for {zone_name}");
+            let zone_matrix = target_zone
+                .matrix
+                .as_ref()
+                .expect("Matrix missing for {zone_name}");
             width = zone_matrix.num_columns();
             height = zone_matrix.num_rows();
             if zone_matrix.num_elements() != total_leds {

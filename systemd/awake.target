@@ -1,0 +1,6 @@
+[Unit]
+Description=User-level Awake Target
+Conflicts=sleep.target
+
+[Install]
+WantedBy=default.target

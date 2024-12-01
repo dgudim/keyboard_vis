@@ -1,0 +1,3 @@
+[Unit]
+Description=User-level Sleep Target
+Conflicts=awake.target

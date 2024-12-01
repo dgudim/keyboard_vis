@@ -1,0 +1,13 @@
+[Unit]
+Description=OpenRGB control
+After=syslog.target network.target multi-user.target sddm.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/openrgb --server
+Restart=always
+RemainAfterExit=yes
+RestartSec=3
+
+[Install]
+WantedBy=default.target

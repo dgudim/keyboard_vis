@@ -7,11 +7,10 @@ use crate::utils::*;
 use atomic::Ordering;
 use log::warn;
 use log::{error, info};
-use openrgb::data::Color;
-use openrgb::data::Controller;
-use openrgb::data::Mode;
-use openrgb::data::LED;
-use openrgb::OpenRGB;
+use openrgb2::Color;
+use openrgb2::Controller;
+use openrgb2::Led;
+use openrgb2::OpenRgbClient;
 use serde_json::Value;
 use signal_hook::consts::SIGTERM;
 use signal_hook::{consts::SIGINT, iterator::Signals};
@@ -21,7 +20,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::vec;
-use tokio::{net::TcpStream, time::sleep};
+use tokio::{time::sleep};
 
 use rand::prelude::*;
 
@@ -30,10 +29,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     env_logger::init();
 
     // connect to default server at localhost
-    let keyboard_client = get_openrgb_client("Keyboard client").await;
-    let backlight_client = get_openrgb_client("Backlight client").await;
-
-    let controller_ids = 0..keyboard_client.get_controller_count().await?;
+    let openrgb_client = get_openrgb_client("Custom effects client").await;
+    let controllers = openrgb_client.get_all_controllers().await?;
 
     let mut keyboard_controller: Option<ControllerInfo> = None;
     let mut backlight_controller: Option<ControllerInfo> = None;
@@ -59,37 +56,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .expect("Backlight zone missing");
 
     // query and print each controller data
-    for controller_id in controller_ids {
-        let controller = keyboard_client.get_controller(controller_id).await?;
+    for controller in controllers {
         info!(
-            "controller {}: {} | Zones: {:?}",
-            controller_id,
-            controller.name,
+            "[{:?}] Controller {}: {} | Zones: {:?}",
+            controller.device_type(),
+            controller.id(),
+            controller.name(),
             controller
-                .zones
-                .iter()
-                .map(|zone| { zone.name.as_str() })
+                .get_all_zones()
+                .map(|zone| { zone.name().to_owned() })
                 .collect::<Vec<_>>()
         );
-        switch_mode(&keyboard_client, &controller, controller_id, "direct").await?;
-        if controller.name.eq(keyboard_name) {
-            turn_off_unused_zones(&keyboard_client, keyboard_zone, &controller, controller_id)
-                .await?;
-            keyboard_controller = Some(ControllerInfo::new(
-                controller,
-                controller_id,
-                keyboard_zone,
-            )?);
-        } else if controller.name.eq(backlight_name) {
-            turn_off_unused_zones(&keyboard_client, backlight_zone, &controller, controller_id)
-                .await?;
-            backlight_controller = Some(ControllerInfo::new(
-                controller,
-                controller_id,
-                backlight_zone,
-            )?);
+        info!("Switching {} to controllable mode", controller.name());
+        controller.set_controllable_mode().await?;
+        info!("Switched {} to '{:?}' mode", controller.name(), controller.active_mode());
+
+        if controller.name().eq(keyboard_name) {
+            turn_off_unused_zones(keyboard_zone, &controller).await?;
+            keyboard_controller = Some(ControllerInfo::new(controller, keyboard_zone)?);
+        } else if controller.name().eq(backlight_name) {
+            turn_off_unused_zones(backlight_zone, &controller).await?;
+            backlight_controller = Some(ControllerInfo::new(controller, backlight_zone)?);
         } else {
-            turn_off_unused_zones(&keyboard_client, "", &controller, controller_id).await?;
+            turn_off_unused_zones("", &controller).await?;
         }
     }
 
@@ -120,7 +109,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 color: FUNCTION_COLOR2,
             },
         ]),
-        &|_: &LED, index: usize| match index <= 14 {
+        &|_: &Led, index: usize| match index <= 14 {
             true => TOP_ROW_COLOR,
             false => MAIN_COLOR,
         },
@@ -159,12 +148,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         async move {
             info!("Started main render loop");
-            match render_keyboard_frames(
-                keyboard_controller_arc.id,
-                keyboard_controller_arc.zone_id,
-                &keyboard_client,
-            )
-            .await
+            match render_keyboard_frames(&keyboard_controller_arc, keyboard_controller_arc.zone_id)
+                .await
             {
                 Ok(_) => {
                     info!("Main loop exited, exiting the program");
@@ -180,7 +165,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(async move {
         info!("Started aux render loop");
 
-        match render_backlight_frames(&backlight_controller, &backlight_client).await {
+        match render_backlight_frames(&backlight_controller).await {
             Ok(_) => {}
             Err(e) => {
                 error!("An error occurred in the aux frame rendering loop: {}", e);
@@ -228,77 +213,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 }
 
-async fn switch_mode(
-    client: &OpenRGB<TcpStream>,
-    controller: &Controller,
-    controller_id: u32,
-    mode_name: &str,
-) -> Result<(), Box<dyn Error>> {
-    let mode_name_l = mode_name.to_lowercase();
-
-    info!("Switching {} to {mode_name_l} mode", controller.name);
-
-    let (index, mode) = &controller
-        .modes
-        .iter()
-        .enumerate()
-        .find(|(_, mode)| mode.name.to_lowercase().eq(mode_name_l.as_str()))
-        .expect("Didn't find {mode_name} for controller!");
-
-    client
-        .update_mode(
-            controller_id,
-            *index as i32,
-            Mode {
-                value: mode.value,
-                brightness: mode.brightness,
-                brightness_max: mode.brightness_max,
-                brightness_min: mode.brightness_min,
-                color_mode: mode.color_mode,
-                colors: mode.colors.clone(),
-                colors_max: mode.colors_max,
-                colors_min: mode.colors_min,
-                direction: mode.direction,
-                flags: mode.flags,
-                name: mode.name.clone(),
-                speed: mode.speed,
-                speed_max: mode.speed_max,
-                speed_min: mode.speed_min,
-            },
-        )
-        .await?;
-    Ok(())
-}
-
 async fn turn_off_unused_zones(
-    client: &OpenRGB<TcpStream>,
     whitelisted_zone: &str,
     controller: &Controller,
-    controller_id: u32,
 ) -> Result<(), Box<dyn Error>> {
-    if controller.zones.len() == 1 && whitelisted_zone.is_empty() {
-        info!("Turning off controller: {}", controller.name);
-        client
-            .update_leds(controller_id, vec![BLACK; controller.leds.len()])
-            .await?;
+    if controller.get_all_zones().count() == 1 && whitelisted_zone.is_empty() {
+        info!("Turning off controller: {}", controller.name());
+        controller.set_all_leds(BLACK).await?;
         return Ok(());
     }
     for (zone_id, z) in controller
-        .zones
-        .iter()
+        .get_all_zones()
         .enumerate()
-        .filter(|(_, z)| z.name.ne(whitelisted_zone))
+        .filter(|(_, z)| z.name().ne(whitelisted_zone))
     {
         info!(
-            "Turning off zone {} of controller: {}",
-            z.name, controller.name
+            "Turning off zone '{}' of controller: '{}'",
+            z.name(),
+            controller.name()
         );
-        client
-            .update_zone_leds(
-                controller_id,
-                zone_id as u32,
-                vec![BLACK; z.leds_count as usize],
-            )
+        controller
+            .set_zone_leds(zone_id, vec![BLACK; z.num_leds() as usize])
             .await?;
     }
     Ok(())
@@ -315,14 +250,13 @@ fn enq_keyboard_frame(frame: Frame) {
 }
 
 async fn render_keyboard_frames(
-    id: u32,
-    zone_id: u32,
-    client: &OpenRGB<TcpStream>,
+    controller: &ControllerInfo,
+    zone_id: usize,
 ) -> Result<(), Box<dyn Error>> {
     let frame_delay = Duration::from_millis(FRAME_DURATION_MS as u64);
     loop {
         match KEYBOARD_FRAME_Q.pop() {
-            Ok(frame) => client.update_zone_leds(id, zone_id, frame).await?,
+            Ok(frame) => controller.raw.set_zone_leds(zone_id, frame).await?,
             Err(_) => {
                 if ABOUT_TO_SHUTDOWN.load(Ordering::Relaxed) > 0 {
                     // Exit the loop, we need to shutdown
@@ -337,17 +271,14 @@ async fn render_keyboard_frames(
 
 async fn render_backlight_frames(
     backlight_controller: &ControllerInfo,
-    client: &OpenRGB<TcpStream>,
 ) -> Result<(), Box<dyn Error>> {
     let frame_delay = Duration::from_millis(FRAME_DURATION_MS as u64);
     let base = vec![BLACK; backlight_controller.total_leds];
 
     let update_leds = |frame: Frame| {
-        return client.update_zone_leds(
-            backlight_controller.id,
-            backlight_controller.zone_id,
-            frame,
-        );
+        return backlight_controller
+            .raw
+            .set_zone_leds(backlight_controller.zone_id, frame);
     };
 
     let generate_frame = |offset: f64, offset2: f64, brightness: f64| {
@@ -390,10 +321,10 @@ async fn render_backlight_frames(
     }
 }
 
-async fn get_openrgb_client(name: &str) -> OpenRGB<TcpStream> {
+async fn get_openrgb_client(name: &str) -> OpenRgbClient {
     loop {
-        match OpenRGB::connect().await {
-            Ok(cl) => {
+        match OpenRgbClient::connect().await {
+            Ok(mut cl) => {
                 cl.set_name(name)
                     .await
                     .expect("Failed setting openrgb client name");

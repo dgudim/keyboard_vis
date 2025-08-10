@@ -8,14 +8,13 @@ use std::{
 use css_color_parser::Color as CssColor;
 use dashmap::DashMap;
 use log::info;
-use openrgb::data::{Color, Controller, ZoneType, LED};
+use openrgb2::{Color, Controller, Led, ZoneType};
 
 use crate::{consts::*, enq_keyboard_frame};
 
 pub struct ControllerInfo {
     pub raw: Controller,
-    pub id: u32,
-    pub zone_id: u32,
+    pub zone_id: usize,
 
     pub width: usize,
     pub height: usize,
@@ -27,26 +26,20 @@ pub struct ControllerInfo {
 }
 
 impl ControllerInfo {
-    pub fn new(
-        controller: Controller,
-        id: u32,
-        zone_name: &str,
-    ) -> Result<ControllerInfo, Box<dyn Error>> {
+    pub fn new(controller: Controller, zone_name: &str) -> Result<ControllerInfo, Box<dyn Error>> {
         let (target_zone_id, target_zone) = controller
-            .zones
-            .iter()
+            .get_all_zones()
             .enumerate()
-            .find(|(_, zone)| zone.name.eq(zone_name))
+            .find(|(_, zone)| zone.name().eq(zone_name))
             .expect("Zone {zone_name} not found in {id}");
 
         let mut height = 1;
-        let total_leds = target_zone.leds_count as usize;
+        let total_leds = target_zone.num_leds() as usize;
         let mut width = total_leds;
 
-        if target_zone.r#type.eq(&ZoneType::Matrix) {
+        if target_zone.zone_type().eq(&ZoneType::Matrix) {
             let zone_matrix = target_zone
-                .matrix
-                .as_ref()
+                .matrix()
                 .expect("Matrix missing for {zone_name}");
             width = zone_matrix.num_columns();
             height = zone_matrix.num_rows();
@@ -61,15 +54,14 @@ impl ControllerInfo {
                 | total_leds: {total_leds} 
                 | width: {width}, height: {height}
                 | center x: {}, center y: {}",
-            controller.name,
+            controller.name(),
             width / 2,
             height / 2
         );
 
         Ok(ControllerInfo {
-            zone_id: target_zone_id as u32,
+            zone_id: target_zone_id,
             raw: controller,
-            id,
             width,
             height,
             center_x: width / 2,
@@ -78,8 +70,8 @@ impl ControllerInfo {
         })
     }
 
-    pub fn leds(&self) -> impl Iterator<Item = (usize, &LED)> {
-        return self.raw.leds.iter().enumerate();
+    pub fn leds(&self) -> impl Iterator<Item = (usize, &Led)> {
+        return self.raw.leds().iter().enumerate();
     }
 
     // Index of the led into xy coordinates
@@ -235,7 +227,8 @@ pub fn composite(
 ) -> bool {
     info!("COMPOSITE !");
     // Get the contents from the RwLock
-    let notifications = notifications_lock.read().unwrap();
+    let notifications: std::sync::RwLockReadGuard<'_, Vec<Notification>> =
+        notifications_lock.read().unwrap();
 
     // This is the array that will hold colors of the loading bar at the top of the keyboard
     // Initialise it to black initially
@@ -333,9 +326,9 @@ pub struct KeyMap<'a> {
 
 // Map keyboard key names to colors
 pub fn get_frame_by_key_names<'a>(
-    leds: impl Iterator<Item = (usize, &'a LED)>,
+    leds: impl Iterator<Item = (usize, &'a Led)>,
     keymaps: Vec<KeyMap>,
-    fallback_function: &dyn Fn(&LED, usize) -> Color,
+    fallback_function: &dyn Fn(&Led, usize) -> Color,
 ) -> Frame {
     return leds
         .map(|(index, led)| -> Color {

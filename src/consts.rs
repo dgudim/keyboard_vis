@@ -4,8 +4,8 @@ use atomic::Atomic;
 use color_hex::color_from_hex;
 use concurrent_queue::ConcurrentQueue;
 use once_cell::sync::Lazy;
-use openrgb::data::Color;
 use css_color_parser::Color as CssColor;
+use openrgb2::Color;
 
 use crate::u8_to_col;
 

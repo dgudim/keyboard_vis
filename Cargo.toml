@@ -20,3 +20,5 @@ rand = "0.8.5"
 serde_json = "1.0.102"
 signal-hook = "0.3.17"
 tokio = { version = "1.29.1", features = ["macros", "io-util", "time"] }
+wayland-client = "0.31.11"
+wayland-protocols = { version = "0.32.9",  features = ["client", "wayland-client", "staging"] }

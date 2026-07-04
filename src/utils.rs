@@ -8,13 +8,13 @@ use std::{
 use css_color_parser::Color as CssColor;
 use dashmap::DashMap;
 use log::info;
-use openrgb2::{Color, Controller, Led, ZoneType};
+use openrgb2::{Color, Controller, Led, Zone, ZoneType};
 
 use crate::{consts::*, enq_keyboard_frame};
 
-pub struct ControllerInfo {
-    pub raw: Controller,
-    pub zone_id: usize,
+pub struct ZonedControllerInfo {
+    raw: Controller,
+    zone_id: usize,
 
     pub width: usize,
     pub height: usize,
@@ -25,8 +25,11 @@ pub struct ControllerInfo {
     pub total_leds: usize,
 }
 
-impl ControllerInfo {
-    pub fn new(controller: Controller, zone_name: &str) -> Result<ControllerInfo, Box<dyn Error>> {
+impl ZonedControllerInfo {
+    pub fn new(
+        controller: Controller,
+        zone_name: &str,
+    ) -> Result<ZonedControllerInfo, Box<dyn Error>> {
         let (target_zone_id, target_zone) = controller
             .get_all_zones()
             .enumerate()
@@ -34,7 +37,7 @@ impl ControllerInfo {
             .expect("Zone {zone_name} not found in {id}");
 
         let mut height = 1;
-        let total_leds = target_zone.num_leds() as usize;
+        let total_leds = target_zone.num_leds();
         let mut width = total_leds;
 
         if target_zone.zone_type().eq(&ZoneType::Matrix) {
@@ -59,7 +62,7 @@ impl ControllerInfo {
             height / 2
         );
 
-        Ok(ControllerInfo {
+        Ok(ZonedControllerInfo {
             zone_id: target_zone_id,
             raw: controller,
             width,
@@ -70,8 +73,12 @@ impl ControllerInfo {
         })
     }
 
+    pub fn zone(&'_ self) -> Zone<'_> {
+        self.raw.get_zone(self.zone_id).unwrap()
+    }
+
     pub fn leds(&self) -> impl Iterator<Item = (usize, &Led)> {
-        return self.raw.leds().iter().enumerate();
+        self.raw.leds().iter().enumerate()
     }
 
     // Index of the led into xy coordinates
@@ -183,7 +190,7 @@ pub fn get_timestamp() -> u128 {
 }
 
 pub fn flash_color(
-    keyboard_info: &Arc<ControllerInfo>,
+    keyboard_info: &Arc<ZonedControllerInfo>,
     color: Color,
     hold: u64,
     progress_map: &Arc<ProgressMap>,
@@ -220,7 +227,7 @@ pub fn flash_color(
 }
 
 pub fn composite(
-    keyboard_info: &ControllerInfo,
+    keyboard_info: &ZonedControllerInfo,
     progress_map: &ProgressMap,
     notifications_lock: &RwLock<Vec<Notification>>,
     fade_time_ms: Option<u32>,
@@ -299,10 +306,8 @@ pub fn composite(
             };
         }
 
-        let mut index = KEYBOARD_COL_OFFSET_START + 2;
-        for notification in notifications.iter() {
+        for (index, notification) in (KEYBOARD_COL_OFFSET_START + 2..).zip(notifications.iter()) {
             new_frame[index] = notification.settings.color;
-            index += 1;
         }
     }
 
@@ -311,9 +316,15 @@ pub fn composite(
     true
 }
 
-pub fn get_keyboard_base(keyboard_info: &ControllerInfo) -> Frame {
-    if SCREEN_LOCKED.load(Ordering::Relaxed) {
-        vec![DIM_GRAY; keyboard_info.total_leds]
+pub fn get_keyboard_base(keyboard_info: &ZonedControllerInfo) -> Frame {
+    let user_idle = USER_IDLE.load(Ordering::Relaxed);
+    let screen_locked = SCREEN_LOCKED.load(Ordering::Relaxed);
+    if user_idle && screen_locked {
+        vec![IDLE_COLOR_LOCKED_SCREEN; keyboard_info.total_leds]
+    } else if user_idle {
+        KEYBOARD_IDLE_FRAME.read().unwrap().clone()
+    } else if screen_locked {
+        vec![LOCKED_SCREEN_COLOR; keyboard_info.total_leds]
     } else {
         KEYBOARD_BASE_FRAME.read().unwrap().clone()
     }
@@ -330,19 +341,19 @@ pub fn get_frame_by_key_names<'a>(
     keymaps: Vec<KeyMap>,
     fallback_function: &dyn Fn(&Led, usize) -> Color,
 ) -> Frame {
-    return leds
-        .map(|(index, led)| -> Color {
-            // Try to find the led in any keymap
-            let mapping = keymaps.iter().find(|keymap| -> bool {
-                keymap
-                    .keys
-                    .iter()
-                    .any(|key_substr| led.name.contains(key_substr))
-            });
-            match mapping {
-                Some(map) => map.color,
-                None => fallback_function(led, index),
-            }
-        })
-        .collect();
+    leds.map(|(index, led)| -> Color {
+        println!("{}", led.name);
+        // Try to find the led in any keymap
+        let mapping = keymaps.iter().find(|keymap| -> bool {
+            keymap
+                .keys
+                .iter()
+                .any(|key_substr| led.name.contains(key_substr))
+        });
+        match mapping {
+            Some(map) => map.color,
+            None => fallback_function(led, index),
+        }
+    })
+    .collect()
 }

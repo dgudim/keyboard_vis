@@ -9,6 +9,8 @@ use openrgb2::Color;
 
 use crate::u8_to_col;
 
+pub const IDLE_TIMEOUT_MS: u32 = 60_000 * 3;
+
 // Workarounds quirks in some keyboards (skip esc key, etc) this offsets the starting position of the top bar
 pub const KEYBOARD_COL_OFFSET_START: usize = 1;
 // The same, but fo the end of the top bar
@@ -36,11 +38,15 @@ pub const GRAY: Color = Color {
     g: 65,
     b: 80,
 };
-pub const DIM_GRAY: Color = Color {
+pub const LOCKED_SCREEN_COLOR: Color = Color {
     r: 40,
     g: 35,
     b: 40,
 };
+pub const IDLE_COLOR_LOCKED_SCREEN: Color = u8_to_col(color_from_hex!("#1f0e02"));
+pub const IDLE_COLOR_BASE: Color = u8_to_col(color_from_hex!("#360c04"));
+pub const IDLE_COLOR_NUMS: Color = u8_to_col(color_from_hex!("#130217"));
+pub const IDLE_COLOR_SPACE: Color = u8_to_col(color_from_hex!("#2e0404"));
 
 pub type Frame = Vec<Color>;
 
@@ -60,9 +66,11 @@ pub const PURPLE: Color = u8_to_col(color_from_hex!("#ff00ff"));
 
 pub static KEYBOARD_LAST_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(Vec::new()));
 pub static KEYBOARD_BASE_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(Vec::new()));
+pub static KEYBOARD_IDLE_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(Vec::new()));
 pub static KEYBOARD_FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(ConcurrentQueue::unbounded);
 
 // Arc for screen lock state and flash color
 pub static SCREEN_LOCKED: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
+pub static USER_IDLE: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
 pub static ABOUT_TO_SHUTDOWN: Lazy<Arc<AtomicU8>> = Lazy::new(|| Arc::new(AtomicU8::new(0)));
 pub static KEYBOARD_FLASH_COLOR: Lazy<Arc<Atomic<Color>>> = Lazy::new(|| Arc::new(Atomic::new(BLACK)));

@@ -1,9 +1,11 @@
 mod consts;
 mod dbus;
 mod utils;
+mod wayland;
 use crate::consts::*;
 use crate::dbus::*;
 use crate::utils::*;
+use crate::wayland::*;
 use atomic::Ordering;
 use log::warn;
 use log::{error, info};
@@ -20,7 +22,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::vec;
-use tokio::{time::sleep};
+use tokio::time::sleep;
 
 use rand::prelude::*;
 
@@ -32,8 +34,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let openrgb_client = get_openrgb_client("Custom effects client").await;
     let controllers = openrgb_client.get_all_controllers().await?;
 
-    let mut keyboard_controller: Option<ControllerInfo> = None;
-    let mut backlight_controller: Option<ControllerInfo> = None;
+    let mut keyboard_controller: Option<ZonedControllerInfo> = None;
+    let mut backlight_controller: Option<ZonedControllerInfo> = None;
 
     // Read json config
     let config_j: Value = serde_json::from_str(
@@ -69,14 +71,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
         );
         info!("Switching {} to controllable mode", controller.name());
         controller.set_controllable_mode().await?;
-        info!("Switched {} to '{:?}' mode", controller.name(), controller.active_mode());
+        info!(
+            "Switched {} to '{:?}' mode",
+            controller.name(),
+            controller.active_mode()
+        );
 
         if controller.name().eq(keyboard_name) {
             turn_off_unused_zones(keyboard_zone, &controller).await?;
-            keyboard_controller = Some(ControllerInfo::new(controller, keyboard_zone)?);
+            keyboard_controller = Some(ZonedControllerInfo::new(controller, keyboard_zone)?);
         } else if controller.name().eq(backlight_name) {
             turn_off_unused_zones(backlight_zone, &controller).await?;
-            backlight_controller = Some(ControllerInfo::new(controller, backlight_zone)?);
+            backlight_controller = Some(ZonedControllerInfo::new(controller, backlight_zone)?);
         } else {
             turn_off_unused_zones("", &controller).await?;
         }
@@ -85,11 +91,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let keyboard_controller =
         Arc::new(keyboard_controller.unwrap_or_else(|| panic!("{} not found!", keyboard_name)));
 
+    spawn_wayland_monitor();
+
     let backlight_controller =
         Arc::new(backlight_controller.unwrap_or_else(|| panic!("{} not found!", backlight_name)));
 
     // Starting frame: full black
     *KEYBOARD_BASE_FRAME.write().unwrap() = vec![BLACK; keyboard_controller.total_leds];
+    *KEYBOARD_IDLE_FRAME.write().unwrap() = vec![BLACK; keyboard_controller.total_leds];
     *KEYBOARD_LAST_FRAME.write().unwrap() = vec![BLACK; keyboard_controller.total_leds];
 
     // Target frame: colored according to my preferences
@@ -112,6 +121,57 @@ async fn main() -> Result<(), Box<dyn Error>> {
         &|_: &Led, index: usize| match index <= 14 {
             true => TOP_ROW_COLOR,
             false => MAIN_COLOR,
+        },
+    );
+
+    let keyboard_idle_substrate = get_frame_by_key_names(
+        keyboard_controller.leds(),
+        Vec::from([
+            KeyMap {
+                keys: Vec::from([
+                    "Key: Number Pad",
+                    "Key: Num Lock",
+                    "Insert",
+                    "Delete",
+                    "Page",
+                    "Arrow",
+                    "End",
+                    "Home",
+                    "Print",
+                    "Scroll",
+                    "Pause",
+                ]),
+                color: BLACK,
+            },
+            KeyMap {
+                keys: Vec::from([
+                    "Key: `",
+                    "Key: 1",
+                    "Key: 2",
+                    "Key: 3",
+                    "Key: 4",
+                    "Key: 5",
+                    "Key: 6",
+                    "Key: 7",
+                    "Key: 8",
+                    "Key: 9",
+                    "Key: 0",
+                    "Key: -",
+                    "Key: =",
+                    "Key: Backspace",
+                ]),
+                color: IDLE_COLOR_NUMS,
+            },
+            KeyMap {
+                keys: Vec::from([
+                    "Key: Space"
+                ]),
+                color: IDLE_COLOR_SPACE,
+            },
+        ]),
+        &|_: &Led, index: usize| match index <= 14 {
+            true => BLACK,
+            false => IDLE_COLOR_BASE,
         },
     );
 
@@ -148,9 +208,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         async move {
             info!("Started main render loop");
-            match render_keyboard_frames(&keyboard_controller_arc, keyboard_controller_arc.zone_id)
-                .await
-            {
+            match render_keyboard_frames(&keyboard_controller_arc).await {
                 Ok(_) => {
                     info!("Main loop exited, exiting the program");
                     ABOUT_TO_SHUTDOWN.store(2, Ordering::Relaxed);
@@ -165,7 +223,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     tokio::spawn(async move {
         info!("Started aux render loop");
 
-        match render_backlight_frames(&backlight_controller).await {
+        match render_table_backlight_frames(&backlight_controller).await {
             Ok(_) => {}
             Err(e) => {
                 error!("An error occurred in the aux frame rendering loop: {}", e);
@@ -204,6 +262,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     *KEYBOARD_BASE_FRAME.write().unwrap() = keyboard_target_substrate;
+    *KEYBOARD_IDLE_FRAME.write().unwrap() = keyboard_idle_substrate;
 
     loop {
         match process_dbus(&config_j, keyboard_controller.clone()) {
@@ -222,7 +281,7 @@ async fn turn_off_unused_zones(
         controller.set_all_leds(BLACK).await?;
         return Ok(());
     }
-    for (zone_id, z) in controller
+    for (_, z) in controller
         .get_all_zones()
         .enumerate()
         .filter(|(_, z)| z.name().ne(whitelisted_zone))
@@ -232,9 +291,7 @@ async fn turn_off_unused_zones(
             z.name(),
             controller.name()
         );
-        controller
-            .set_zone_leds(zone_id, vec![BLACK; z.num_leds() as usize])
-            .await?;
+        z.set_all_leds(BLACK).await?;
     }
     Ok(())
 }
@@ -249,14 +306,11 @@ fn enq_keyboard_frame(frame: Frame) {
     }
 }
 
-async fn render_keyboard_frames(
-    controller: &ControllerInfo,
-    zone_id: usize,
-) -> Result<(), Box<dyn Error>> {
+async fn render_keyboard_frames(controller: &ZonedControllerInfo) -> Result<(), Box<dyn Error>> {
     let frame_delay = Duration::from_millis(FRAME_DURATION_MS as u64);
     loop {
         match KEYBOARD_FRAME_Q.pop() {
-            Ok(frame) => controller.raw.set_zone_leds(zone_id, frame).await?,
+            Ok(frame) => controller.zone().set_leds(frame).await?,
             Err(_) => {
                 if ABOUT_TO_SHUTDOWN.load(Ordering::Relaxed) > 0 {
                     // Exit the loop, we need to shutdown
@@ -269,21 +323,14 @@ async fn render_keyboard_frames(
     }
 }
 
-async fn render_backlight_frames(
-    backlight_controller: &ControllerInfo,
+async fn render_table_backlight_frames(
+    backlight_controller: &ZonedControllerInfo,
 ) -> Result<(), Box<dyn Error>> {
     let frame_delay = Duration::from_millis(FRAME_DURATION_MS as u64);
-    let base = vec![BLACK; backlight_controller.total_leds];
+    let base: Vec<Color> = vec![BLACK; backlight_controller.total_leds];
 
-    let update_leds = |frame: Frame| {
-        return backlight_controller
-            .raw
-            .set_zone_leds(backlight_controller.zone_id, frame);
-    };
-
-    let generate_frame = |offset: f64, offset2: f64, brightness: f64| {
-        return base
-            .iter()
+    fn generate_frame(offset: f64, offset2: f64, brightness: f64, base: &[Color]) -> Frame {
+        base.iter()
             .enumerate()
             .map(|(index, _)| {
                 lerp_color(
@@ -296,8 +343,8 @@ async fn render_backlight_frames(
                     brightness,
                 )
             })
-            .collect::<Vec<_>>();
-    };
+            .collect()
+    }
 
     let mut offset = 0.0;
     let mut offset2 = 0.8;
@@ -306,7 +353,7 @@ async fn render_backlight_frames(
     loop {
         offset += 0.06;
         offset2 += 0.035;
-        if SCREEN_LOCKED.load(Ordering::Relaxed) {
+        if SCREEN_LOCKED.load(Ordering::Relaxed) || USER_IDLE.load(Ordering::Relaxed) {
             brightness -= 0.07_f64
         } else if ABOUT_TO_SHUTDOWN.load(Ordering::Relaxed) > 0 {
             brightness -= 0.1_f64
@@ -315,7 +362,10 @@ async fn render_backlight_frames(
         }
         brightness = brightness.clamp(0.0, 1.0);
         if brightness > 0.0 {
-            update_leds(generate_frame(offset, offset2, brightness)).await?;
+            backlight_controller
+                .zone()
+                .set_leds(generate_frame(offset, offset2, brightness, &base))
+                .await?;
         }
         sleep(frame_delay).await;
     }

@@ -9,7 +9,7 @@ use std::{
 use crate::{utils::{
     composite, flash_color, get_timestamp, parse_hex, Notification, NotificationSettings,
     ProgressMap,
-}, consts::*, ControllerInfo};
+}, consts::*, ZonedControllerInfo};
 use dbus::{
     arg::{prop_cast, PropMap},
     blocking::Connection,
@@ -21,13 +21,13 @@ use log::{info, warn};
 use serde_json::Value;
 
 fn get_full_match_rule<'a>(interface: &'a str, path: &'a str, member: &'a str) -> MatchRule<'a> {
-    return MatchRule::with_member(
+    MatchRule::with_member(
         MatchRule::with_interface(MatchRule::with_path(MatchRule::new(), path), interface),
         member,
-    );
+    )
 }
 
-pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ControllerInfo>) -> Result<(), Box<dyn Error>> {
+pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ZonedControllerInfo>) -> Result<(), Box<dyn Error>> {
     // Connect to the D-Bus session bus (this is blocking, unfortunately).
     let conn = Connection::new_session()?;
 
@@ -132,9 +132,8 @@ pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ControllerInfo>) -> Res
 
                     if progress_delta > 0.0 {
                         tuple.1 = progress;
+                        info!("Notification progress for {source} = {progress}");
                     }
-
-                    info!("Notification progress for {source} = {progress}");
                 }
 
                 // flash in special cases
@@ -281,7 +280,11 @@ pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ControllerInfo>) -> Res
 
     conn.start_receive(
         matchrule_notification_delivered,
-        Box::new(move |message: Message, _| {
+        Box::new({
+            let keyboard_info = keyboard_info.clone();
+            let progress_map = progress_map.clone();
+            let notification_q = notification_q.clone();
+            move |message: Message, _| {
             match message.read1::<u32>() {
                 Ok(id) => {
                     let destination = message.destination().unwrap().to_string();
@@ -310,11 +313,21 @@ pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ControllerInfo>) -> Res
                 }
             };
             true
-        }),
+        }}),
     );
+
+    let mut last_user_idle = USER_IDLE.load(Ordering::Relaxed);
 
     loop {
         conn.process(Duration::from_millis(1000)).unwrap();
+
+        let user_idle = USER_IDLE.load(Ordering::Relaxed);
+        if user_idle != last_user_idle {
+            last_user_idle = user_idle;
+            info!("User idle state changed: {user_idle}");
+            composite(&keyboard_info, &progress_map, &notification_q, Some(1500));
+        }
+
         if ABOUT_TO_SHUTDOWN.load(Ordering::Relaxed) > 1 {
             info!("Exit");
             return Ok(());

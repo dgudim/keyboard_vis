@@ -43,7 +43,7 @@ pub const LOCKED_SCREEN_COLOR: Color = Color {
     g: 35,
     b: 40,
 };
-pub const IDLE_COLOR_LOCKED_SCREEN: Color = u8_to_col(color_from_hex!("#1f0e02"));
+pub const IDLE_COLOR_LOCKED_SCREEN: Color = u8_to_col(color_from_hex!("#1f0d02"));
 pub const IDLE_COLOR_BASE: Color = u8_to_col(color_from_hex!("#360c04"));
 pub const IDLE_COLOR_NUMS: Color = u8_to_col(color_from_hex!("#130217"));
 pub const IDLE_COLOR_SPACE: Color = u8_to_col(color_from_hex!("#2e0404"));

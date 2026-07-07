@@ -342,7 +342,6 @@ pub fn get_frame_by_key_names<'a>(
     fallback_function: &dyn Fn(&Led, usize) -> Color,
 ) -> Frame {
     leds.map(|(index, led)| -> Color {
-        println!("{}", led.name);
         // Try to find the led in any keymap
         let mapping = keymaps.iter().find(|keymap| -> bool {
             keymap

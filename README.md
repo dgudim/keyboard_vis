@@ -10,6 +10,8 @@
 - Display important notifications on the keyboard
 - Display download/file copy progress on the keyboard
 - Dim the keyboard (and backlight) after locking the screen
+- Dim the keyboard (and backlight) when idle for some time (wayland only)
+- Dim the keyboard (and backlight) when the room gets dark, using a Home Assistant light sensor
 - Cool animation on startup
 
 ## Running 

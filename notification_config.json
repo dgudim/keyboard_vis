@@ -7,6 +7,14 @@
         "name": "ASUS TUF GAMING B550M-PLUS",
         "zone": "Aura Addressable 1"
     },
+    "home_assistant": {
+        "url": "http://hass.kloud.home",
+        "token": "",
+        "sensor_id": "sensor.xperia_sp_light_sensor",
+        "lux_threshold": 70,
+        "poll_interval_seconds": 30,
+        "dim_brightness_mult": 0.5
+    },
     "notification_map": {
         "Thunderbird": {
             "color": "#0000ff",

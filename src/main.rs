@@ -1,9 +1,11 @@
 mod consts;
 mod dbus;
+mod homeassistant;
 mod utils;
 mod wayland;
 use crate::consts::*;
 use crate::dbus::*;
+use crate::homeassistant::*;
 use crate::utils::*;
 use crate::wayland::*;
 use atomic::Ordering;
@@ -92,6 +94,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Arc::new(keyboard_controller.unwrap_or_else(|| panic!("{} not found!", keyboard_name)));
 
     spawn_wayland_monitor();
+
+    match HomeAssistantConfig::from_config(&config_j) {
+        Some(ha_config) => spawn_ambient_light_monitor(ha_config),
+        None => info!("No 'home_assistant' config section found; ambient light dimming unavailable"),
+    }
 
     let backlight_controller =
         Arc::new(backlight_controller.unwrap_or_else(|| panic!("{} not found!", backlight_name)));
@@ -296,6 +303,14 @@ async fn turn_off_unused_zones(
     Ok(())
 }
 
+fn dim_frame(frame: Frame) -> Frame {
+    let factor = AMBIENT_BRIGHTNESS.load(Ordering::Relaxed);
+    if factor >= 1.0 {
+        return frame;
+    }
+    frame.iter().map(|color| lerp_color(&BLACK, color, factor)).collect()
+}
+
 fn enq_keyboard_frame(frame: Frame) {
     *KEYBOARD_LAST_FRAME.write().unwrap() = frame.clone();
     match KEYBOARD_FRAME_Q.push(frame) {
@@ -310,7 +325,7 @@ async fn render_keyboard_frames(controller: &ZonedControllerInfo) -> Result<(), 
     let frame_delay = Duration::from_millis(FRAME_DURATION_MS as u64);
     loop {
         match KEYBOARD_FRAME_Q.pop() {
-            Ok(frame) => controller.zone().set_leds(frame).await?,
+            Ok(frame) => controller.zone().set_leds(dim_frame(frame)).await?,
             Err(_) => {
                 if ABOUT_TO_SHUTDOWN.load(Ordering::Relaxed) > 0 {
                     // Exit the loop, we need to shutdown
@@ -361,10 +376,12 @@ async fn render_table_backlight_frames(
             brightness += 0.07_f64
         }
         brightness = brightness.clamp(0.0, 1.0);
-        if brightness > 0.0 {
+        // Scale by the ambient-light multiplier so the backlight dims in the dark too.
+        let effective_brightness = brightness * AMBIENT_BRIGHTNESS.load(Ordering::Relaxed);
+        if effective_brightness > 0.0 {
             backlight_controller
                 .zone()
-                .set_leds(generate_frame(offset, offset2, brightness, &base))
+                .set_leds(generate_frame(offset, offset2, effective_brightness, &base))
                 .await?;
         }
         sleep(frame_delay).await;

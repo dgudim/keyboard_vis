@@ -216,7 +216,7 @@ pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ZonedControllerInfo>) -
         Box::new({
             
             let find_in_notif_q = |id: u32, notif_q: &Vec<Notification>| -> Option<usize> {
-                return notif_q.iter().position(|notif| notif.id == id);
+                notif_q.iter().position(|notif| notif.id == id)
             };
 
             let pending_notification_q = pending_notification_q.clone();

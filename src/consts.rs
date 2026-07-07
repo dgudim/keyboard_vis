@@ -74,3 +74,5 @@ pub static SCREEN_LOCKED: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBo
 pub static USER_IDLE: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
 pub static ABOUT_TO_SHUTDOWN: Lazy<Arc<AtomicU8>> = Lazy::new(|| Arc::new(AtomicU8::new(0)));
 pub static KEYBOARD_FLASH_COLOR: Lazy<Arc<Atomic<Color>>> = Lazy::new(|| Arc::new(Atomic::new(BLACK)));
+
+pub static AMBIENT_BRIGHTNESS: Lazy<Arc<Atomic<f64>>> = Lazy::new(|| Arc::new(Atomic::new(1.0)));

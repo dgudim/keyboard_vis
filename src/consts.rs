@@ -1,10 +1,13 @@
-use std::sync::{atomic::{AtomicBool, AtomicU8}, Arc, RwLock};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU8},
+    Arc, Mutex, RwLock,
+};
 
 use atomic::Atomic;
 use color_hex::color_from_hex;
 use concurrent_queue::ConcurrentQueue;
-use once_cell::sync::Lazy;
 use css_color_parser::Color as CssColor;
+use once_cell::sync::Lazy;
 use openrgb2::Color;
 
 use crate::u8_to_col;
@@ -69,10 +72,22 @@ pub static KEYBOARD_BASE_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(V
 pub static KEYBOARD_IDLE_FRAME: Lazy<RwLock<Frame>> = Lazy::new(|| RwLock::new(Vec::new()));
 pub static KEYBOARD_FRAME_Q: Lazy<ConcurrentQueue<Frame>> = Lazy::new(ConcurrentQueue::unbounded);
 
+pub static CURRENT_LANGUAGE_COLOR_MARKER_KEYS: Lazy<Vec<&str>> = Lazy::new(|| {
+    Vec::from([
+        "Key: Caps Lock",
+        "Key: Print Screen",
+        "Key: Scroll Lock",
+        "Key: Pause/Break",
+    ])
+});
+
 // Arc for screen lock state and flash color
 pub static SCREEN_LOCKED: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
+pub static CURRENT_LANGUAGE_COLOR_MODIFIER: Lazy<Arc<Atomic<Color>>> =
+    Lazy::new(|| Arc::new(Atomic::new(BLACK)));
 pub static USER_IDLE: Lazy<Arc<AtomicBool>> = Lazy::new(|| Arc::new(AtomicBool::new(false)));
 pub static ABOUT_TO_SHUTDOWN: Lazy<Arc<AtomicU8>> = Lazy::new(|| Arc::new(AtomicU8::new(0)));
-pub static KEYBOARD_FLASH_COLOR: Lazy<Arc<Atomic<Color>>> = Lazy::new(|| Arc::new(Atomic::new(BLACK)));
+pub static KEYBOARD_FLASH_COLOR: Lazy<Arc<Atomic<Color>>> =
+    Lazy::new(|| Arc::new(Atomic::new(BLACK)));
 
 pub static AMBIENT_BRIGHTNESS: Lazy<Arc<Atomic<f64>>> = Lazy::new(|| Arc::new(Atomic::new(1.0)));

@@ -108,6 +108,7 @@ pub struct Notification {
 }
 
 pub type ProgressMap = DashMap<String, (Color, f64)>;
+pub type ColorMap = DashMap<String, Color>;
 
 #[derive(Clone)]
 pub struct WideColor {
@@ -308,6 +309,18 @@ pub fn composite(
 
         for (index, notification) in (KEYBOARD_COL_OFFSET_START + 2..).zip(notifications.iter()) {
             new_frame[index] = notification.settings.color;
+        }
+    }
+
+    let language_color = CURRENT_LANGUAGE_COLOR_MODIFIER.load(Ordering::Relaxed);
+    if language_color != BLACK {
+        for (index, led) in keyboard_info.leds() {
+            if CURRENT_LANGUAGE_COLOR_MARKER_KEYS
+                .iter()
+                .any(|key_substr| led.name.contains(key_substr))
+            {
+                new_frame[index] = language_color
+            }
         }
     }
 

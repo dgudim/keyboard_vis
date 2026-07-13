@@ -6,10 +6,9 @@ use std::{
     vec,
 };
 
-use crate::{utils::{
-    composite, flash_color, get_timestamp, parse_hex, Notification, NotificationSettings,
-    ProgressMap,
-}, consts::*, ZonedControllerInfo};
+use crate::{ZonedControllerInfo, consts::*, utils::{
+    ColorMap, Notification, NotificationSettings, ProgressMap, composite, flash_color, get_timestamp, parse_hex,
+}};
 use dbus::{
     arg::{prop_cast, PropMap},
     blocking::Connection,
@@ -36,8 +35,12 @@ pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ZonedControllerInfo>) -
 
     let mut notification_map = HashMap::new();
     let progress_map = Arc::new(ProgressMap::new());
+    let language_color_map = Arc::new(ColorMap::new());
 
-    for (key, value) in config_j["notification_map"].as_object().expect("notification_map map is missing from the json").into_iter() {
+    for (key, value) in config_j["notification_map"]
+    .as_object()
+    .expect("notification_map map is missing from the json")
+    .into_iter() {
         info!("Loaded {} from notification map", key);
         notification_map.insert(
             key.to_owned(),
@@ -53,6 +56,11 @@ pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ZonedControllerInfo>) -
     for (key, value) in config_j["progress_map"].as_object().expect("progress_map is missing from the json").into_iter() {
         info!("Loaded {} from progress map", key);
         progress_map.insert(key.to_owned(), (parse_hex(value.as_str().expect("failed getting value for {key} in progress_map")), 0.0));
+    }
+
+    for (key, value) in config_j["language_color_map"].as_object().expect("language_color_map is missing from the json").into_iter() {
+        info!("Loaded {} from language color map", key);
+        language_color_map.insert(key.to_owned(), parse_hex(value.as_str().expect("failed getting value for {key} in language_color_map")));
     }
 
     let notification_delivery_timeout = 2000;
@@ -170,18 +178,15 @@ pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ZonedControllerInfo>) -
         Box::new({
             
             // Copy all the necessary stuff to move into closure
-            let screen_locked = SCREEN_LOCKED.clone();
             let notifications = notification_q.clone();
             let progress_map = progress_map.clone();
             let keyboard_info_arc = keyboard_info.clone();
 
             move |message: Message, _| {
-                let locked: bool = message.read1().unwrap();
-                info!("Screen locked/unlocked: {locked}");
-                // Store screen locked state
-                screen_locked.store(locked, Ordering::Relaxed);
-                // Animate!
-                composite(&keyboard_info_arc, &progress_map, &notifications, Some(1500));
+                let lang: &str = message.read1().unwrap();
+                let color = language_color_map.entry(lang.to_string()).or_default();
+                CURRENT_LANGUAGE_COLOR_MODIFIER.store(color.to_owned(), Ordering::Relaxed);
+                composite(&keyboard_info_arc, &progress_map, &notifications, Some(100));
                 true
             }
         })

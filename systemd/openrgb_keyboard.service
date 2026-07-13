@@ -8,7 +8,7 @@ Conflicts=sleep.target
 Type=simple
 ExecStart=run.sh
 Restart=always
-RestartSec=1
+RestartSec=5
 
 [Install]
 WantedBy=awake.target

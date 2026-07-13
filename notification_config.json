@@ -39,5 +39,8 @@
         "application://firefox": "#ff4503",
         "application://org.kde.dolphin": "#03c2fc",
         "application://org.strawberrymusicplayer.strawberry.desktop": "#562b22"
+    },
+    "language_color_map": {
+        "Russian": "#f322bc"
     }
 }

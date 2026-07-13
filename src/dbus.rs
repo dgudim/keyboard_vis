@@ -58,6 +58,11 @@ pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ZonedControllerInfo>) -
     let notification_delivery_timeout = 2000;
 
     let matchrule_progress = MatchRule::new_signal("com.canonical.Unity.LauncherEntry", "Update");
+    let matchrule_language = get_full_match_rule(
+        "org.kde.osdService",
+        "/org/kde/osdService",
+        "kbdLayoutChanged",
+    );
     let matchrule_screen = get_full_match_rule(
         "org.freedesktop.ScreenSaver",
         "/org/freedesktop/ScreenSaver",
@@ -99,6 +104,7 @@ pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ZonedControllerInfo>) -
         (
             vec![
                 matchrule_progress.match_str(),
+                matchrule_language.match_str(),
                 matchrule_screen.match_str(),
                 matchrule_notification_closed.match_str(),
                 matchrule_notification_opened.match_str(),
@@ -154,6 +160,28 @@ pub fn process_dbus(config_j: &Value, keyboard_info: Arc<ZonedControllerInfo>) -
                     // recomposite if progress changed to not cause stalled animations
                     composite(&keyboard_info_arc, &progress_map, &notification_q, None);
                 }
+                true
+            }
+        })
+    );
+
+    conn.start_receive(
+        matchrule_language,
+        Box::new({
+            
+            // Copy all the necessary stuff to move into closure
+            let screen_locked = SCREEN_LOCKED.clone();
+            let notifications = notification_q.clone();
+            let progress_map = progress_map.clone();
+            let keyboard_info_arc = keyboard_info.clone();
+
+            move |message: Message, _| {
+                let locked: bool = message.read1().unwrap();
+                info!("Screen locked/unlocked: {locked}");
+                // Store screen locked state
+                screen_locked.store(locked, Ordering::Relaxed);
+                // Animate!
+                composite(&keyboard_info_arc, &progress_map, &notifications, Some(1500));
                 true
             }
         })
